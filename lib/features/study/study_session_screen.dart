@@ -9,6 +9,7 @@ import '../../domain/models/study_card.dart';
 import '../../domain/srs/sm2.dart';
 import '../../widgets/ipa_label.dart';
 import '../../widgets/pos_tag.dart';
+import '../../widgets/tappable_word_text.dart';
 import '../../widgets/word_detail_sheet.dart';
 
 final _dueQueueProvider = FutureProvider.family<List<StudyCard>, int?>(
@@ -55,6 +56,35 @@ class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
                 _revealed = false;
               });
             },
+            onRemove: () async {
+              final card = cards[_index];
+              final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: Text('Remove "${card.headword}" from study?'),
+                      content: const Text(
+                        'This deletes its review history and takes it out of the SRS pool. '
+                        'It stays in any lists it belongs to and can be added back to study later.',
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                        FilledButton(
+                          style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text('Remove'),
+                        ),
+                      ],
+                    ),
+                  ) ??
+                  false;
+              if (!confirmed) return;
+              await ref.read(studyRepositoryProvider).removeCard(card.cardId);
+              ref.invalidate(dueCountProvider);
+              setState(() {
+                _queue = List.of(cards)..removeAt(_index);
+                _revealed = false;
+              });
+            },
           );
         },
         loading: () => const Center(child: CircularProgressIndicator()),
@@ -71,6 +101,7 @@ class _CardView extends StatelessWidget {
   final bool revealed;
   final VoidCallback onReveal;
   final void Function(Grade) onGrade;
+  final VoidCallback onRemove;
 
   const _CardView({
     required this.card,
@@ -79,6 +110,7 @@ class _CardView extends StatelessWidget {
     required this.revealed,
     required this.onReveal,
     required this.onGrade,
+    required this.onRemove,
   });
 
   @override
@@ -93,6 +125,22 @@ class _CardView extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text('${index + 1} / $total', style: Theme.of(context).textTheme.labelMedium),
+                  PopupMenuButton<void>(
+                    icon: const Icon(Icons.more_vert),
+                    tooltip: 'More',
+                    itemBuilder: (context) => [
+                      PopupMenuItem(
+                        onTap: onRemove,
+                        child: const Row(
+                          children: [
+                            Icon(Icons.delete_outline, size: 18),
+                            SizedBox(width: 8),
+                            Text('Remove from study'),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
               const SizedBox(height: 6),
@@ -133,10 +181,10 @@ class _CardView extends StatelessWidget {
                           )
                         else ...[
                           if (card.gloss != null)
-                            Text(card.gloss!, textAlign: TextAlign.center),
+                            TappableWordText(card.gloss!, textAlign: TextAlign.center),
                           if (card.example != null) ...[
                             const SizedBox(height: 8),
-                            Text(
+                            TappableWordText(
                               '"${card.example}"',
                               textAlign: TextAlign.center,
                               style: TextStyle(

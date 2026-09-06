@@ -137,7 +137,7 @@ CrosswordPuzzle? generateCrossword(
       }
     }
     if (bestAssignment == null) return null;
-    return _buildPuzzle(width, height, bestSlots!, bestAssignment, entryIdByWord);
+    return _buildPuzzle(width, height, bestSlots!, bestAssignment, entryIdByWord, seedWords);
   }
 
   for (final blackRatio in blackRatioTiers) {
@@ -315,6 +315,7 @@ CrosswordPuzzle _buildPuzzle(
   List<CrosswordSlot> slots,
   Map<int, String> assignment,
   Map<String, int> entryIdByWord,
+  Set<String> seedWords,
 ) {
   final grid = <(int, int), String>{};
   for (var i = 0; i < slots.length; i++) {
@@ -349,6 +350,7 @@ CrosswordPuzzle _buildPuzzle(
         answer: assignment[i]!,
         entryId: entryIdByWord[assignment[i]!]!,
         clue: '', // filled in by CrosswordRepository once generation succeeds
+        fromStudyPool: seedWords.contains(assignment[i]!),
       ),
   ];
 

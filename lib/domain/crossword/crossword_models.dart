@@ -69,6 +69,10 @@ class CrosswordWordPlacement {
   final String answer;
   final int entryId;
   final String clue;
+  // Whether this word came from the user's SRS study pool rather than
+  // generic dictionary filler — powers the "N words from your study list"
+  // counter shown on the puzzle screen.
+  final bool fromStudyPool;
 
   const CrosswordWordPlacement({
     required this.number,
@@ -78,6 +82,7 @@ class CrosswordWordPlacement {
     required this.answer,
     required this.entryId,
     required this.clue,
+    this.fromStudyPool = false,
   });
 
   /// The (row, col) of every cell this word occupies, in order.
@@ -94,6 +99,7 @@ class CrosswordWordPlacement {
         answer: answer,
         entryId: entryId,
         clue: clue ?? this.clue,
+        fromStudyPool: fromStudyPool,
       );
 
   Map<String, dynamic> toJson() => {
@@ -104,6 +110,7 @@ class CrosswordWordPlacement {
         'answer': answer,
         'entryId': entryId,
         'clue': clue,
+        'fromStudyPool': fromStudyPool,
       };
 
   factory CrosswordWordPlacement.fromJson(Map<String, dynamic> json) => CrosswordWordPlacement(
@@ -114,6 +121,9 @@ class CrosswordWordPlacement {
         answer: json['answer'] as String,
         entryId: json['entryId'] as int,
         clue: json['clue'] as String,
+        // Absent on puzzles saved before this field existed — treat as
+        // generic filler rather than failing to parse the saved puzzle.
+        fromStudyPool: json['fromStudyPool'] as bool? ?? false,
       );
 }
 

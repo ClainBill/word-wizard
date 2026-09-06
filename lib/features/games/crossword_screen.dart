@@ -146,12 +146,25 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
     final cells = word.cells;
     final index = cells.indexWhere((c) => _cellKey(c.$1, c.$2) == cell);
     if (index == -1) return;
-    final nextIndex = backward ? index - 1 : index + 1;
-    if (nextIndex >= 0 && nextIndex < cells.length) {
-      setState(() => _selectedCell = _cellKey(cells[nextIndex].$1, cells[nextIndex].$2));
+    if (backward) {
+      final prevIndex = index - 1;
+      if (prevIndex >= 0) {
+        setState(() => _selectedCell = _cellKey(cells[prevIndex].$1, cells[prevIndex].$2));
+      }
       return;
     }
-    if (!backward) _jumpToNextWord(word);
+    // Skip past cells this word already has letters in (typically filled by
+    // a crossing word already solved) and land on the next empty one, the
+    // standard crossword "type-through" feel — jumps to the next word
+    // entirely once every remaining cell in this one is already filled.
+    for (var i = index + 1; i < cells.length; i++) {
+      final key = _cellKey(cells[i].$1, cells[i].$2);
+      if (_filled[key] == null) {
+        setState(() => _selectedCell = key);
+        return;
+      }
+    }
+    _jumpToNextWord(word);
   }
 
   void _jumpToNextWord(CrosswordWordPlacement current) {
@@ -263,6 +276,7 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
       appBar: AppBar(
         title: Text(_isToday ? '${widget.difficulty.label} Crossword' : '${widget.difficulty.label} · $_date'),
         actions: [
+          if (sessionAsync.valueOrNull != null) _StudyPoolBadge(puzzle: sessionAsync.valueOrNull!.puzzle),
           if (sessionAsync.valueOrNull != null)
             IconButton(icon: const Icon(Icons.fact_check_outlined), tooltip: 'Check', onPressed: _check),
           if (_isToday)
@@ -308,6 +322,34 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
           _prepare(session.puzzle, session);
           return _PuzzleBody(state: this, puzzle: session.puzzle);
         },
+      ),
+    );
+  }
+}
+
+/// Corner counter showing how many of today's words came from the user's
+/// SRS study pool rather than generic dictionary filler.
+class _StudyPoolBadge extends StatelessWidget {
+  final CrosswordPuzzle puzzle;
+
+  const _StudyPoolBadge({required this.puzzle});
+
+  @override
+  Widget build(BuildContext context) {
+    final count = puzzle.words.where((w) => w.fromStudyPool).length;
+    if (count == 0) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Tooltip(
+        message: '$count word${count == 1 ? '' : 's'} from your study list',
+        child: Chip(
+          avatar: Icon(Icons.school_outlined, size: 16, color: scheme.primary),
+          label: Text('$count', style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w600)),
+          visualDensity: VisualDensity.compact,
+          backgroundColor: scheme.primaryContainer.withValues(alpha: 0.5),
+          side: BorderSide.none,
+        ),
       ),
     );
   }

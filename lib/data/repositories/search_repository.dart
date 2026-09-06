@@ -10,6 +10,19 @@ class SearchRepository {
 
   Future<WordEntry?> loadWord(String headword) => _db.loadWord(headword);
 
+  /// Resolves a single word tapped inside a gloss, example, or etymology
+  /// line to its full entry — tries the exact headword first, then falls
+  /// back to resolving an inflected surface form (tapping "ran" finds
+  /// "run"). Returns null if the word isn't in the dictionary at all.
+  Future<WordEntry?> lookupTappedWord(String word) async {
+    final lower = word.toLowerCase();
+    final direct = await _db.loadWord(lower);
+    if (direct != null) return direct;
+    final resolved = await _db.resolveForm(lower);
+    if (resolved.isEmpty) return null;
+    return _db.loadWord(resolved.first.headword);
+  }
+
   /// Wrong-answer options for the study session's definition-match mini
   /// exercise — random glosses from unrelated entries.
   Future<List<String>> randomDistractorGlosses(

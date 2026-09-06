@@ -9,6 +9,7 @@ import '../../domain/models/entry.dart';
 import '../../widgets/add_to_list_sheet.dart';
 import '../../widgets/ipa_label.dart';
 import '../../widgets/pos_tag.dart';
+import '../../widgets/tappable_word_text.dart';
 
 final _wordProvider = FutureProvider.family<WordEntry?, String>(
   (ref, headword) => ref.watch(searchRepositoryProvider).loadWord(headword),
@@ -122,7 +123,7 @@ class WordBody extends ConsumerWidget {
           const SizedBox(height: 8),
           _SectionHeader(icon: Icons.history_edu_outlined, label: 'Word origin'),
           const SizedBox(height: 8),
-          Text(
+          TappableWordText(
             word.etymology!,
             style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, height: 1.5),
           ),
@@ -210,7 +211,7 @@ class _ExampleLine extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Text(
+      child: TappableWordText(
         '"$text"',
         style: TextStyle(
           fontStyle: FontStyle.italic,
@@ -248,7 +249,7 @@ class _PosSection extends StatelessWidget {
                       style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
                     ),
                   ),
-                  Expanded(child: Text(sense.gloss)),
+                  Expanded(child: TappableWordText(sense.gloss)),
                 ],
               ),
             ),
