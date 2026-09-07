@@ -3,7 +3,8 @@
 An offline, ad-free advanced-English vocabulary dictionary and flashcard app
 for Flutter — functionally reverse-engineered from renzo Inc.'s Japanese app,
 retargeted from Japanese-for-English-speakers to advanced-English-for-fluent-
-speakers. See `DesignInspiration/` for the full product & technical design doc.
+speakers. See `docs/DESIGN.md` for the full product & technical design doc
+and feature backlog (`DesignInspiration/` is just mood-board images).
 
 ## Status
 
