@@ -3,9 +3,11 @@ import 'dart:isolate';
 import 'dart:math';
 
 import 'package:drift/drift.dart';
+import 'package:flutter/services.dart' show rootBundle;
 
-import '../../domain/crossword/crossword_generator.dart';
+import '../../domain/crossword/clues.dart';
 import '../../domain/crossword/crossword_models.dart';
+import '../../domain/crossword/generator.dart';
 import '../user/user_database.dart';
 import 'search_repository.dart';
 import 'study_repository.dart';
@@ -16,28 +18,30 @@ typedef CrosswordSession = ({CrosswordPuzzle puzzle, Map<String, String> progres
 /// One day's entry in a difficulty's history list.
 typedef CrosswordHistoryEntry = ({String date, bool completed});
 
-// A word only makes sense in a crossword if it's a single run of letters —
-// multi-word entries ("an apple a day") or ones with hyphens/apostrophes
-// can't occupy a straight run of cells. Mirrors the check the "Spell it"
-// study exercise already applies to headwords for the same reason.
-final _pureAlpha = RegExp(r'^[A-Za-z]+$');
+/// The scored word list the generator searches — built offline by
+/// `tool/pipeline/export_crossword_wordlist.py`, see PORTING_SPEC.md §1-§2.
+const _wordListAsset = 'assets/crossword/wordlist.tsv';
 
-// "A few" study-pool words mixed into an otherwise dictionary-filled grid —
-// enough to feel personal without requiring a big study pool to unlock any
-// difficulty.
-const _maxSeedWords = 6;
+// A word only makes sense as an SRS anchor if it's a single run of letters —
+// multi-word entries ("an apple a day") or ones with hyphens can't occupy a
+// straight run of cells. Apostrophes are fine; they're simply dropped from
+// the grid form, which is the spec's `text` vs `display` split.
+final _anchorable = RegExp(r"^[A-Za-z']+$");
 
-// Common English function words (articles, conjunctions, prepositions,
-// pronouns, auxiliary verbs) have no dedicated part-of-speech in this
-// dictionary's schema (only noun/adj/verb/adv) — so their best-ranked entry
-// is often some leftover noun sense instead, frequently a niche technical
-// acronym (e.g. the bundled data's top-ranked "FOR" entry glosses as
-// "Initialism of frame of reference", "HIS" as "health information
-// system"). Since these are exactly the words the frequency-biased solver
-// now reaches for constantly (see crossword_generator.dart), a small
-// hand-written override for the ones actually short enough to place covers
-// the highest-traffic case cheaply, leaving the dictionary-derived clue
-// pipeline for everything else.
+/// How many previous puzzles' answers are barred from reappearing (§A.2
+/// requirement 10). These reach the *solver*, not just anchor selection —
+/// the reference implementation's own gap, and §A.4's one-line fix.
+const _recentPuzzleCount = 10;
+
+/// Common English function words have no dedicated part-of-speech in this
+/// dictionary's schema (only noun/adj/verb/adv), so their best-ranked entry
+/// is often some leftover noun sense instead — frequently a niche technical
+/// initialism (the bundled data's top-ranked "FOR" entry glosses as
+/// "Initialism of frame of reference", "HIS" as "health information
+/// system"). These are exactly the words a score-ordered solver reaches for
+/// constantly, so a small hand-written override covers the highest-traffic
+/// case cheaply, leaving the dictionary-derived clue pipeline for everything
+/// else.
 const _commonWordClues = {
   'A': 'Indefinite article',
   'AN': 'Indefinite article before a vowel sound',
@@ -99,15 +103,13 @@ const _commonWordClues = {
 };
 
 // Deliberately top-level, not a method or a closure written inline inside
-// one: Isolate.run refuses to send a closure whose captured-variable
-// context includes an unsendable object, and a closure created inside an
-// instance method shares its context with the rest of that method's
-// captures — including `this` — even if the closure itself never touches
-// `this`. A genuinely top-level function has no such context to leak.
-Future<CrosswordPuzzle?> _runGenerateInIsolate(List<CrosswordCandidate> candidates, CrosswordDifficulty difficulty) {
-  return Isolate.run(
-    () => generateCrossword(CrosswordGenerationRequest(candidates: candidates, difficulty: difficulty)),
-  );
+// one: Isolate.run refuses to send a closure whose captured-variable context
+// includes an unsendable object, and a closure created inside an instance
+// method shares its context with the rest of that method's captures —
+// including `this` — even if the closure itself never touches `this`. A
+// genuinely top-level function has no such context to leak.
+Future<CrosswordPuzzle?> _runGenerateInIsolate(CrosswordIsolateRequest request) {
+  return Isolate.run(() => generateCrosswordFromSource(request));
 }
 
 class CrosswordRepository {
@@ -115,6 +117,11 @@ class CrosswordRepository {
   final StudyRepository _studyRepository;
   final SearchRepository _searchRepository;
   final _rand = Random();
+
+  /// Cached across generations — the asset is ~1.8 MB and Flutter caches the
+  /// decoded string itself, but keeping the reference avoids a re-decode on
+  /// every regenerate.
+  String? _wordListSource;
 
   CrosswordRepository(this._db, this._studyRepository, this._searchRepository);
 
@@ -139,9 +146,7 @@ class CrosswordRepository {
       );
 
   /// Loads today's puzzle for [difficulty] if one's already been generated,
-  /// otherwise builds one and persists it — a handful of study-pool words
-  /// first, the rest of the grid filled in with generic dictionary words so
-  /// every difficulty is always playable regardless of study-pool size.
+  /// otherwise builds one and persists it.
   Future<CrosswordSession?> loadOrGenerate(CrosswordDifficulty difficulty) async {
     final existing = await _row(difficulty, today());
     if (existing != null) return _sessionFromRow(existing);
@@ -164,11 +169,17 @@ class CrosswordRepository {
     await (_db.delete(_db.crosswordPuzzles)
           ..where((t) => t.puzzleDate.equals(today()) & t.difficulty.equals(difficulty.storageKey)))
         .go();
-    return _generateAndSave(difficulty, today());
+    // A fresh random seed rather than the day's deterministic one, so "Start
+    // new" actually produces a different puzzle.
+    return _generateAndSave(difficulty, today(), seed: _rand.nextInt(1 << 30));
   }
 
-  Future<CrosswordSession?> _generateAndSave(CrosswordDifficulty difficulty, String date) async {
-    final puzzle = await _generate(difficulty);
+  Future<CrosswordSession?> _generateAndSave(
+    CrosswordDifficulty difficulty,
+    String date, {
+    int? seed,
+  }) async {
+    final puzzle = await _generate(difficulty, date, seed: seed);
     if (puzzle == null) return null;
 
     await _db.into(_db.crosswordPuzzles).insertOnConflictUpdate(
@@ -193,72 +204,97 @@ class CrosswordRepository {
     return [for (final r in rows) (date: r.puzzleDate, completed: r.completed)];
   }
 
-  Future<CrosswordPuzzle?> _generate(CrosswordDifficulty difficulty) async {
+  /// Answers used by the last [_recentPuzzleCount] puzzles at this size.
+  Future<Set<String>> _recentAnswers(CrosswordDifficulty difficulty) async {
+    final rows = await (_db.select(_db.crosswordPuzzles)
+          ..where((t) => t.difficulty.equals(difficulty.storageKey))
+          ..orderBy([(t) => OrderingTerm.desc(t.puzzleDate)])
+          ..limit(_recentPuzzleCount))
+        .get();
+    final answers = <String>{};
+    for (final row in rows) {
+      final puzzle = CrosswordPuzzle.fromJson(jsonDecode(row.gridJson) as Map<String, dynamic>);
+      answers.addAll(puzzle.words.map((w) => w.answer));
+    }
+    return answers;
+  }
+
+  Future<String> _loadWordList() async =>
+      _wordListSource ??= await rootBundle.loadString(_wordListAsset);
+
+  Future<CrosswordPuzzle?> _generate(
+    CrosswordDifficulty difficulty,
+    String date, {
+    int? seed,
+  }) async {
     final due = await _studyRepository.dueQueue(limit: 200);
     final all = await _studyRepository.allStudyingCards(limit: 200);
 
+    // Due cards first, then the rest of the study pool. Only `maxAnchors` of
+    // these are ever placed (§7.1: 1 / 2 / 3 by size), but the extras give
+    // `fitAnchors` alternatives when a skeleton has no slot of the right
+    // length — see its graceful degradation.
     final seenEntryIds = <int>{};
-    final seeds = <CrosswordCandidate>[];
-    outer:
+    final srsWords = <(String, String, int)>[];
     for (final source in [due, all]) {
       for (final card in source) {
-        if (seeds.length >= _maxSeedWords) break outer;
+        if (srsWords.length >= 12) break;
         if (!seenEntryIds.add(card.entryId)) continue;
-        if (!_pureAlpha.hasMatch(card.headword)) continue;
-        seeds.add(CrosswordCandidate(
-          entryId: card.entryId,
-          headword: card.headword,
-          isDueToday: due.any((d) => d.entryId == card.entryId),
-          fromStudyPool: true,
-        ));
+        if (!_anchorable.hasMatch(card.headword)) continue;
+        final text = card.headword.replaceAll("'", '').toUpperCase();
+        if (text.length < 3 || text.length > difficulty.size) continue;
+        srsWords.add((text, card.headword, card.entryId));
       }
     }
 
-    // The solver needs close to the dictionary's full variety to reliably
-    // fill a grid at real crossword density (see allCrosswordWords) — this
-    // is genuinely hundreds of thousands of candidates, which is exactly
-    // why generation runs on a background isolate below rather than being
-    // built eagerly per-candidate like the old sampled approach was.
-    final filler = await _searchRepository.allCrosswordWords(
-      minLength: difficulty.minWordLength,
-      maxLength: difficulty.maxWordLength,
+    final request = CrosswordIsolateRequest(
+      wordListSource: await _loadWordList(),
+      difficulty: difficulty,
+      srsWords: srsWords,
+      recentUsage: await _recentAnswers(difficulty),
+      weekday: DateTime.parse(date).weekday,
+      // Seeded from the date and size so a given day's puzzle is
+      // reproducible (§12), unless the user asked for a new one.
+      seed: seed ?? Object.hash(date, difficulty.storageKey),
     );
-    final acronymOnly = await _searchRepository.acronymOnlyEntryIds();
 
-    final candidates = <CrosswordCandidate>[
-      ...seeds,
-      for (final f in filler)
-        if (seenEntryIds.add(f.entryId))
-          CrosswordCandidate(
-            entryId: f.entryId,
-            headword: f.headword,
-            isDueToday: false,
-            fromStudyPool: false,
-            isAcronymOnly: acronymOnly.contains(f.entryId),
-          ),
-    ];
-
-    // The actual pattern generation + backtracking solve is real CPU-bound
-    // search over hundreds of thousands of candidates and can take several
-    // seconds — running it on the calling (UI) isolate would freeze the
-    // app, so it goes on its own isolate. Routed through a top-level
-    // function (_runGenerateInIsolate), not an inline closure here: a
-    // closure written inside an instance method shares its enclosing
-    // method's captured-variable context, which pulls in `this` (and, via
-    // `this`, the unsendable database connection) even when the closure's
-    // own body never references it — Isolate.run then refuses to send it.
-    final puzzle = await _runGenerateInIsolate(candidates, difficulty);
+    // Real CPU-bound backtracking search — seconds on a Mega grid — so it
+    // goes on its own isolate rather than freezing the UI. Routed through a
+    // top-level function (see _runGenerateInIsolate) rather than an inline
+    // closure, which would drag `this` and its unsendable database
+    // connection across the boundary.
+    final puzzle = await _runGenerateInIsolate(request);
     if (puzzle == null) return null;
 
-    // Only now — for the ~40-90 words that actually made it into the grid,
-    // not the whole candidate pool — fetch clue text.
-    final headwordsByEntryId = <int, String>{for (final w in puzzle.words) w.entryId: w.answer};
+    return _withClues(puzzle);
+  }
+
+  /// Resolves clue text for the ~10-100 words that actually made it into the
+  /// grid — not the whole 49,000-entry pool.
+  ///
+  /// The spec bakes a clue into the word list asset because its clue source
+  /// (WordNet) isn't available at runtime, and is candid that the result is
+  /// the system's weakest part (§8) and the highest-value thing to replace
+  /// (§A.4). This app's clue source *is* available at runtime: the bundled
+  /// dictionary yields definition, synonym, "___, for short" and
+  /// fill-in-the-blank phrasings from each word's earliest senses. What is
+  /// ported verbatim is the part §8 says to port exactly — the giveaway
+  /// filter, applied here as the final gate.
+  Future<CrosswordPuzzle> _withClues(CrosswordPuzzle puzzle) async {
+    final headwordsByEntryId = <int, String>{
+      for (final w in puzzle.words)
+        if (w.entryId >= 0) w.entryId: w.answer,
+    };
     final clueOptions = await _searchRepository.crosswordClueOptions(headwordsByEntryId);
+
     String pickClue(int entryId, String answer) {
       final override = _commonWordClues[answer];
       if (override != null) return override;
-      final options = clueOptions[entryId];
-      if (options == null || options.isEmpty) return 'A ${answer.length}-letter word.';
+      final options = [
+        for (final option in clueOptions[entryId] ?? const <String>[])
+          if (!isGiveaway(option, answer)) option,
+      ];
+      if (options.isEmpty) return 'A ${answer.length}-letter word.';
       return options[_rand.nextInt(options.length)];
     }
 
@@ -266,6 +302,9 @@ class CrosswordRepository {
       width: puzzle.width,
       height: puzzle.height,
       words: [for (final w in puzzle.words) w.copyWith(clue: pickClue(w.entryId, w.answer))],
+      themeName: puzzle.themeName,
+      themeKind: puzzle.themeKind,
+      qualityScore: puzzle.qualityScore,
     );
   }
 

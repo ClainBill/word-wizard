@@ -1,33 +1,85 @@
-/// Tuning knobs for each puzzle size — a fixed grid filled via a real
-/// North-American-style construction (symmetric black-square pattern +
-/// constraint-solving fill, see `crossword_generator.dart`), not grown
-/// organically from intersections. [blackRatio] trades a little density for
-/// materially better word choice: benchmarking the fill against the actual
-/// dictionary (weighted toward common words, see [crossword_generator])
-/// showed that a few points more black space gives the solver enough slack
-/// to avoid forcing obscure words into tight corners — e.g. at Mini's size,
-/// 16% black produced ~70% obscure fill vs ~35% at 20%, for only a ~4-point
-/// density drop (87.8% -> 83.7%), still far denser than the old organic
-/// greedy generator's ~55-65% ceiling.
+/// Puzzle sizes and the presentation model the solving screen renders.
+///
+/// The generator itself lives in `generator.dart`; everything here is either
+/// a tuning constant from PORTING_SPEC.md §4.3 or a plain data holder.
+library;
+
+/// The three sizes, with the per-size search parameters §4.3 measured.
+///
+/// [whiteTarget] is a **floor on black squares, not an exact figure** —
+/// capping entry length can already place more black squares than the target
+/// implies, so achieved white % often lands below it (72.8% against a 0.78
+/// target at 9x9 in the reference implementation). A below-target result is
+/// not a failure.
+///
+/// The white percentages here are deliberately below the 85% a naive reading
+/// of "dense grid = good grid" suggests, and that is the single most
+/// important decision in the whole design (§10.1). Chasing 85% produces
+/// grids that are not merely hard to fill but provably *unfillable* from a
+/// word list of recognizable words — a CP-SAT model proved several 17x17
+/// grids at that density infeasible in ~0.1s — and it was the direct cause
+/// of the obscure fill this generator replaced. Fewer black squares means
+/// longer entries means dense mutual interlocking. Treat white % as an
+/// outcome, not a target.
 enum CrosswordDifficulty {
-  mini(label: 'Mini', maxWidth: 7, maxHeight: 7, minWordLength: 3, maxWordLength: 7, blackRatio: 0.20),
-  midi(label: 'Midi', maxWidth: 11, maxHeight: 11, minWordLength: 3, maxWordLength: 9, blackRatio: 0.18),
-  mega(label: 'Mega', maxWidth: 15, maxHeight: 15, minWordLength: 3, maxWordLength: 12, blackRatio: 0.16);
+  // At 5x5 one black square is 4% of the grid, so an 85% target caps mini at
+  // three black squares and symmetry makes that effectively "zero or two".
+  // 0.84 unlocks the four-black-square patterns standard in real NYT Minis.
+  mini(
+    label: 'Mini',
+    size: 5,
+    maxEntryLen: 5,
+    whiteTarget: 0.84,
+    maxAnchors: 1,
+    overallBudget: Duration(seconds: 15),
+  ),
+  midi(
+    label: 'Midi',
+    size: 9,
+    maxEntryLen: 6,
+    whiteTarget: 0.78,
+    maxAnchors: 2,
+    overallBudget: Duration(seconds: 25),
+  ),
+  mega(
+    label: 'Mega',
+    size: 17,
+    maxEntryLen: 9,
+    whiteTarget: 0.72,
+    maxAnchors: 3,
+    overallBudget: Duration(seconds: 60),
+  );
 
   final String label;
-  final int maxWidth;
-  final int maxHeight;
-  final int minWordLength;
-  final int maxWordLength;
-  final double blackRatio;
+
+  /// Grids are always square; [size] is both width and height.
+  final int size;
+
+  /// No entry may exceed this. Enforced by splitting over-long white runs
+  /// during skeleton generation (§4.2 phase 1), which is half of what makes
+  /// the grids fillable — the other half is [whiteTarget].
+  final int maxEntryLen;
+
+  /// Target white fraction; see the class doc.
+  final double whiteTarget;
+
+  /// How many anchor entries (SRS words first, then theme words) to try to
+  /// place. Measured against placement success in §7.1.
+  final int maxAnchors;
+
+  /// Wall clock for the whole `generatePuzzle` call, across every skeleton
+  /// attempt. Generous relative to §11's measured times (~0.1-1.5s mini,
+  /// ~0.13s midi, ~0.8-8s mega) because this runs on a phone, on a
+  /// background isolate, once a day.
+  final Duration overallBudget;
 
   const CrosswordDifficulty({
     required this.label,
-    required this.maxWidth,
-    required this.maxHeight,
-    required this.minWordLength,
-    required this.maxWordLength,
-    required this.blackRatio,
+    required this.size,
+    required this.maxEntryLen,
+    required this.whiteTarget,
+    required this.maxAnchors,
+    required this.overallBudget,
   });
 
   String get storageKey => name;
@@ -36,30 +88,81 @@ enum CrosswordDifficulty {
       CrosswordDifficulty.values.firstWhere((d) => d.storageKey == key);
 }
 
-/// One word eligible for placement — a single-word, letters-only headword.
-/// [fromStudyPool] distinguishes the handful of real study-pool words from
-/// generic dictionary filler — the generator tries study-pool words first
-/// within a matching slot so they reliably make it into the grid. Clue text
-/// isn't resolved until after generation (see [CrosswordRepository]) —
-/// there's no point fetching definitions for the ~99% of a 400k-word pool
-/// that never gets placed.
-class CrosswordCandidate {
-  final int entryId;
-  final String headword;
-  final bool isDueToday;
-  final bool fromStudyPool;
-  final bool isAcronymOnly;
-
-  const CrosswordCandidate({
-    required this.entryId,
-    required this.headword,
-    required this.isDueToday,
-    required this.fromStudyPool,
-    this.isAcronymOnly = false,
-  });
-}
-
 enum CrosswordDirection { across, down }
+
+CrosswordDirection oppositeOf(CrosswordDirection d) =>
+    d == CrosswordDirection.across ? CrosswordDirection.down : CrosswordDirection.across;
+
+/// One entry from the scored word list asset (`assets/crossword/wordlist.tsv`,
+/// built by `tool/pipeline/export_crossword_wordlist.py`). Mirrors the §2
+/// schema; [entryId] is this app's addition, pointing back at the dictionary
+/// row a clue is resolved from once the word is actually placed.
+class CrosswordEntry {
+  /// Grid form: A-Z only, uppercase, no spaces or punctuation.
+  final String text;
+
+  /// Human form, may carry an apostrophe ("don't" for DONT).
+  final String display;
+
+  final int entryId;
+
+  /// Zipf frequency, ~0.0 (never observed) to ~7.7 ("the").
+  final double freqZipf;
+
+  /// Count of clue-eligible senses, excluding proper-noun senses (§2.2).
+  final int synsetCount;
+
+  final bool isProper;
+  final bool isPhrase;
+
+  /// Whether every clue-eligible sense is an "Abbreviation/Initialism/
+  /// Acronym of X" gloss — such an entry can only be clued by spelling
+  /// itself out. Scored down heavily at export time.
+  final bool isAcronym;
+
+  final List<String> tags;
+
+  /// Precomputed composite quality, §2.3. Higher is better; the solver
+  /// branches in descending score order.
+  final double score;
+
+  const CrosswordEntry({
+    required this.text,
+    required this.display,
+    required this.entryId,
+    required this.freqZipf,
+    required this.synsetCount,
+    required this.isProper,
+    required this.isPhrase,
+    required this.isAcronym,
+    required this.tags,
+    required this.score,
+  });
+
+  int get length => text.length;
+
+  /// An entry for a word that isn't in the list at all — the SRS path.
+  /// §7.2: "If a word isn't in the list, synthesize an Entry for it anyway so
+  /// it can still be placed — the SRS vocabulary is the point of the
+  /// product." Scored high so anchor ordering puts it first.
+  factory CrosswordEntry.synthetic({
+    required String text,
+    required String display,
+    required int entryId,
+  }) =>
+      CrosswordEntry(
+        text: text,
+        display: display,
+        entryId: entryId,
+        freqZipf: 3.0,
+        synsetCount: 1,
+        isProper: false,
+        isPhrase: false,
+        isAcronym: false,
+        tags: const [],
+        score: 100.0,
+      );
+}
 
 class CrosswordWordPlacement {
   final int number;
@@ -69,9 +172,10 @@ class CrosswordWordPlacement {
   final String answer;
   final int entryId;
   final String clue;
-  // Whether this word came from the user's SRS study pool rather than
-  // generic dictionary filler — powers the "N words from your study list"
-  // counter shown on the puzzle screen.
+
+  /// Whether this word came from the user's SRS study pool rather than
+  /// generic fill — powers the "N words from your study list" counter shown
+  /// on the puzzle screen.
   final bool fromStudyPool;
 
   const CrosswordWordPlacement({
@@ -129,13 +233,29 @@ class CrosswordWordPlacement {
 
 /// A generated, ready-to-render puzzle. Cell/grid geometry (which cells are
 /// blocked, which numbers show) is derived from [words] on demand by the
-/// solving screen rather than duplicated here.
+/// solving screen rather than duplicated here — every white cell belongs to
+/// both an across and a down entry (§4.1 rule 3), so [words] describes the
+/// whole grid.
+///
+/// [themeName] and [qualityScore] are recorded but not rendered: §9.2's
+/// score is reported rather than used to steer search, and the Sunday theme
+/// mechanism (§7.3) hides its words on purpose.
 class CrosswordPuzzle {
   final int width;
   final int height;
   final List<CrosswordWordPlacement> words;
+  final String? themeName;
+  final String? themeKind;
+  final double qualityScore;
 
-  const CrosswordPuzzle({required this.width, required this.height, required this.words});
+  const CrosswordPuzzle({
+    required this.width,
+    required this.height,
+    required this.words,
+    this.themeName,
+    this.themeKind,
+    this.qualityScore = 0,
+  });
 
   List<CrosswordWordPlacement> get across =>
       words.where((w) => w.direction == CrosswordDirection.across).toList()
@@ -149,6 +269,9 @@ class CrosswordPuzzle {
         'width': width,
         'height': height,
         'words': words.map((w) => w.toJson()).toList(),
+        if (themeName != null) 'themeName': themeName,
+        if (themeKind != null) 'themeKind': themeKind,
+        'qualityScore': qualityScore,
       };
 
   factory CrosswordPuzzle.fromJson(Map<String, dynamic> json) => CrosswordPuzzle(
@@ -157,5 +280,8 @@ class CrosswordPuzzle {
         words: (json['words'] as List)
             .map((w) => CrosswordWordPlacement.fromJson(w as Map<String, dynamic>))
             .toList(),
+        themeName: json['themeName'] as String?,
+        themeKind: json['themeKind'] as String?,
+        qualityScore: (json['qualityScore'] as num?)?.toDouble() ?? 0,
       );
 }

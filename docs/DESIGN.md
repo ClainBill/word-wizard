@@ -135,7 +135,7 @@ A single Entry Detail card always renders its sections in this fixed order:
 | Study Session | One card at a time, front (word) → reveal (definition/example/note) → a small comprehension mini-exercise → four-button SM-2 grading; a ⋮ menu removes the current word from study without leaving the session | Study tab, List Detail |
 | Progress Dashboard | Cards due today, streak, mastered count, 14-day forecast | Study tab |
 | Manage Study Words | Every word in the SRS pool with stage badge, review count; Pause/Resume, Reset, Remove | Study tab |
-| Games → Crossword | Daily mini/midi/mega crossword seeded from the SRS pool, real words only, no forced symmetry; saves/resumes state; an app-bar chip counts how many of today's words came from the study pool | Games tab |
+| Games → Crossword | Daily 5×5/9×9/17×17 crossword built to American/NYT convention (180° symmetry, min entry length 3, fully checked, connected), anchored on the SRS pool with a day-of-week theme; saves/resumes state; an app-bar chip counts how many of today's words came from the study pool. Generator ported from `PORTING_SPEC.md` | Games tab |
 | Settings | Theme, TTS voice/rate, notification time, backup/export, import, data source attribution | Tab bar |
 
 ---
@@ -236,7 +236,8 @@ lib/
   domain/
     models/            # Entry, Sense, Card, WordList
     srs/                # sm2.dart — pure functions, unit-testable
-    crossword/          # generator, pattern solver, models
+    crossword/          # word_list, skeleton, solver, themes, clues, generator
+                        #   — the PORTING_SPEC.md port; see its header comments
   data/
     dictionary/         # drift schema + DAO for dictionary.db (read-only)
     user/               # drift schema + DAO for user.db (lists, cards, log, crosswords)
@@ -304,7 +305,7 @@ Every idea raised after the MVP shipped, in the order they were raised, with wha
 | # | Idea | Status | Lift | Notes |
 |---|---|---|---|---|
 | 1 | SRS study screen: tap or swipe up to pop the full word card up from below | ✅ done | — | Shipped before this audit. |
-| 2 | Crossword clues should favor real, commonly-used words — cut initialisms, drop forced symmetry | ✅ done | — | Shipped before this audit; acronyms deprioritized, not banned outright. |
+| 2 | Crossword clues should favor real, commonly-used words — cut initialisms, drop forced symmetry | ✅ done | — | Superseded by the `PORTING_SPEC.md` port: fill comes from a scored word list restricted to recognizable vocabulary, so any valid fill is a publishable one. Initialisms are scored down and filtered out of the short-entry pool. Symmetry is now *kept* deliberately — it is what makes the grids fillable (spec §10.1), not decoration. |
 | 3 | Show a counter of how many crossword words came from the SRS pool, in the corner | ✅ done | Quick | **Shipped 2026-09-06.** Puzzle words carry a persisted `fromStudyPool` flag; an app-bar chip shows the count. |
 | 4 | Search: a trailing space should cut a word off for an exact match ("muse " excludes "museum") | ✅ done | — | Found already built during the audit, just unchecked in the source notes. |
 | 5 | Group lists into folders — folders behave like lists but can also nest other lists and words | ⬜ open | Large | Needs a real hierarchy in the data model (self-referential `lists`, or a parent `list_id` column), plus recursive study/pause propagation and new UI for nested browsing. |
@@ -314,7 +315,7 @@ Every idea raised after the MVP shipped, in the order they were raised, with wha
 | 9 | SRS comprehension mini-exercises under the flipped card (sentence/synonym/definition matching, spelling, etc.) | 🟡 partial | Medium (remaining) | Definition-match and letter-spelling are live and randomly picked. Still open: synonym-matching and example-sentence-matching. |
 | 10 | From the full card during SRS, tap a word in the description/example to add it to a list — without leaving SRS | ✅ done | Medium | **Shipped 2026-09-06** — via the tappable-word feature (#15): tapping a word pops its own card up as a stacked sheet, with its own Add-to-list/Study buttons, on top of the study session. |
 | 11 | Remove a word from SRS without leaving the session (via an ⋮ menu) | ✅ done | Quick | **Shipped 2026-09-06.** The repository-level remove already existed (Manage Study Words); this wires a confirm-and-remove menu into the study session card itself. |
-| 12 | A Games tab with an intelligent daily Crossword/Strands-style game built from SRS words — prefer no cloud API | 🟡 partial | Large (remaining) | Games tab + daily Crossword (mini/midi/mega, offline, seeded from SRS) already exist. A Strands-style word-search mode is unbuilt. |
+| 12 | A Games tab with an intelligent daily Crossword/Strands-style game built from SRS words — prefer no cloud API | 🟡 partial | Large (remaining) | Games tab + daily Crossword exist; the generator was rebuilt from `PORTING_SPEC.md` (offline, deterministic per day, CSP fill over a scored word list, SRS words as anchors). A Strands-style word-search mode is unbuilt. |
 | 13 | A spelling test for complicated SRS words, in the Games tab | 🟡 partial | Medium (remaining) | The scrambled-letter "Spell it" exercise exists inline in SRS study (#9). A standalone, difficulty-targeted version in the Games tab isn't built. |
 | 14 | Full documentation of every feature, accessible inside the app | ⬜ open | Medium | Mostly a content-writing task once a Settings → Help screen exists; this doc is the closest thing to that content today. |
 | 15 | Click any word in a card to pull up that word's own card — especially in examples and word origin | ✅ done | Medium | **Shipped 2026-09-06.** Every word in a gloss, example, or etymology line is tappable (dotted underline); resolves inflected forms too. |

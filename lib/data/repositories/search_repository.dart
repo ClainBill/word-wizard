@@ -32,21 +32,6 @@ class SearchRepository {
   }) =>
       _db.randomGlosses(excludeEntryId: excludeEntryId, excludeGloss: excludeGloss, count: count);
 
-  /// Every single-word dictionary entry in range — the candidate pool for
-  /// the daily crossword's constraint solver, which needs close to the
-  /// full dictionary's variety to reliably fill a grid at real
-  /// crossword-density (see [DictionaryDatabase.allCrosswordWords]).
-  Future<List<({int entryId, String headword})>> allCrosswordWords({
-    required int minLength,
-    required int maxLength,
-  }) =>
-      _db.allCrosswordWords(minLength: minLength, maxLength: maxLength);
-
-  /// Entry ids whose only clue-eligible senses are "Abbreviation/Initialism/
-  /// Acronym of X" glosses — the crossword generator deprioritizes these so
-  /// acronyms stay a minority of the fill rather than dominating short slots.
-  Future<Set<int>> acronymOnlyEntryIds() => _db.acronymOnlyEntryIds();
-
   /// Alternate clue phrasings per entry (other senses, fill-in-the-blank
   /// example sentences) so the crossword doesn't always show the same
   /// first-sense definition.

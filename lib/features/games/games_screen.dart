@@ -51,7 +51,7 @@ class _DifficultyTile extends StatelessWidget {
           ),
         ),
         title: Text(difficulty.label),
-        subtitle: Text('Up to ${difficulty.maxWidth}×${difficulty.maxHeight}'),
+        subtitle: Text('${difficulty.size}×${difficulty.size}'),
         trailing: const Icon(Icons.chevron_right),
       ),
     );

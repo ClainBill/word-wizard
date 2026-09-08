@@ -22,8 +22,6 @@ part 'dictionary_database.g.dart';
 class DictionaryDatabase extends _$DictionaryDatabase {
   DictionaryDatabase(super.e);
 
-  static final _pureAlpha = RegExp(r'^[A-Za-z]+$');
-
   // Wiktionary orders senses with the primary/most common meaning first —
   // confirmed against the bundled data (e.g. "cat"'s sense_order 0-1 are the
   // mammal/pet senses; its obscure "synonym of itinerant worker" sense is
@@ -308,76 +306,6 @@ class DictionaryDatabase extends _$DictionaryDatabase {
       result.add(gloss);
     }
     return result;
-  }
-
-  /// Every headword in the given length range, letters-only once spaces and
-  /// apostrophes are dropped — the candidate pool for the daily crossword's
-  /// constraint solver.
-  ///
-  /// Multi-word phrase entries ("keep an eye on") and contractions ("don't")
-  /// are included by stripping the space/apostrophe, matching how a real
-  /// crossword grid actually renders a phrase answer (one unbroken run of
-  /// letters) — the bundled dictionary has ~148k phrase headwords, a real
-  /// source of natural mid-length fill this pool was missing entirely
-  /// before. The length filter is applied to the stripped form so a phrase
-  /// like "I do" (stripped: "IDO") is measured at its real 3-letter length,
-  /// not its 4-character written-with-space form.
-  ///
-  /// Unlike a sampled subset, this genuinely needs to be (close to)
-  /// exhaustive: benchmarking the solver in Python against the real
-  /// dictionary showed a ~200k-word sample fails to reach real
-  /// crossword-grid density (~84% white) reliably, while hardly cutting
-  /// down the ~464k-word full pool fixes that completely — a scan over the
-  /// diversity of the actual word list matters far more than raw count.
-  /// Glosses aren't fetched here since only the handful of words that
-  /// actually get placed ever need a clue — see
-  /// [CrosswordRepository]/[crosswordClueOptions].
-  Future<List<({int entryId, String headword})>> allCrosswordWords({
-    required int minLength,
-    required int maxLength,
-  }) async {
-    final rows = await customSelect(
-      '''
-      SELECT id, headword,
-             length(REPLACE(REPLACE(headword, ' ', ''), ?, '')) AS stripped_length
-      FROM entries
-      WHERE stripped_length BETWEEN ? AND ?
-      ORDER BY (frequency_rank IS NULL), frequency_rank
-      ''',
-      variables: [Variable.withString("'"), Variable.withInt(minLength), Variable.withInt(maxLength)],
-    ).get();
-
-    final seen = <String>{};
-    final result = <({int entryId, String headword})>[];
-    for (final row in rows) {
-      final stripped = row.read<String>('headword').replaceAll(' ', '').replaceAll("'", '');
-      if (!_pureAlpha.hasMatch(stripped)) continue;
-      if (!seen.add(stripped.toUpperCase())) continue;
-      result.add((entryId: row.read<int>('id'), headword: stripped));
-    }
-    return result;
-  }
-
-  /// Entry ids whose only clue-eligible senses (see [_maxSenseOrderForClue])
-  /// are "Abbreviation/Initialism/Acronym of X" glosses — words whose clue
-  /// would otherwise almost always spell out exactly what they stand for.
-  /// Checked once per generation (a single aggregate query over ~870k
-  /// early-order sense rows, ~0.3s against the bundled dictionary) so the
-  /// generator can deprioritize them in favor of words with a real
-  /// definition available, without paying the cost of a per-candidate join
-  /// against the full ~385k-word pool.
-  Future<Set<int>> acronymOnlyEntryIds() async {
-    final rows = await customSelect('''
-      SELECT entry_id FROM senses
-      WHERE sense_order <= $_maxSenseOrderForClue AND gloss IS NOT NULL
-      GROUP BY entry_id
-      HAVING SUM(CASE
-        WHEN gloss NOT LIKE 'Abbreviation of%'
-         AND gloss NOT LIKE 'Initialism of%'
-         AND gloss NOT LIKE 'Acronym of%'
-        THEN 1 ELSE 0 END) = 0
-    ''').get();
-    return {for (final row in rows) row.read<int>('entry_id')};
   }
 
   /// A pool of possible clue phrasings per entry, restricted to each
