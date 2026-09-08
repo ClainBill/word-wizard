@@ -180,15 +180,28 @@ List<CrosswordEntry> anchorsForSkeleton({
 /// theme word's, and score-ordered degradation would drop the one anchor the
 /// product exists to place. [selectAnchors] emits SRS words first.
 ///
+/// [rng], when given, shuffles which slot of the right length an anchor lands
+/// in. Without it the first matching slot always wins, and *that* is what
+/// decides whether the grid is fillable: pre-assigning OPAQUE fixes a Q in
+/// the middle of two crossing entries, and if the crossings can't take it the
+/// solver dead-ends in about 3ms. Deterministic placement means all twelve
+/// orchestration retries re-place the anchor in the same square and re-hit the
+/// same dead end — measured as a 9x9 that failed every attempt in 360ms
+/// total. Shuffling turns those retries into twelve genuinely different
+/// placements.
+///
 /// A stricter approach, reserving anchor cells *before* generating the
-/// skeleton via `generateSkeletonCapped`'s `reservedWhite`, is better and is
-/// §A.2's requirement 4 — still a known gap here, as in the reference
+/// skeleton via `generateSkeletonCapped`'s `reservedWhite`, is better still
+/// and is §A.2's requirement 4 — a known gap here, as in the reference
 /// implementation.
 (Map<int, String>, List<CrosswordEntry>) fitAnchors(
   List<CrosswordEntry> anchors,
-  List<CrosswordSlot> slots,
-) {
+  List<CrosswordSlot> slots, {
+  Random? rng,
+}) {
   var remaining = [...anchors];
+  final order = [...slots];
+  if (rng != null) order.shuffle(rng);
 
   while (remaining.isNotEmpty) {
     // Longest first: long entries have the fewest slots that can hold them.
@@ -210,7 +223,7 @@ List<CrosswordEntry> anchorsForSkeleton({
 
     for (final anchor in byLength) {
       CrosswordSlot? target;
-      for (final slot in slots) {
+      for (final slot in order) {
         if (usedSlots.contains(slot.slotId)) continue;
         if (slot.length != anchor.length) continue;
         final cells = slot.cells();

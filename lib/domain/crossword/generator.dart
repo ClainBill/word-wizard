@@ -96,8 +96,7 @@ CrosswordPuzzle? generateCrosswordFromSource(CrosswordIsolateRequest request) {
 /// landed in the grid rather than the whole pool.
 CrosswordPuzzle? generateCrossword(
   CrosswordGenerationRequest request, {
-  int skeletonAttempts = 12,
-  Duration perSolveBudget = const Duration(seconds: 8),
+  int skeletonAttempts = 30,
 }) {
   final difficulty = request.difficulty;
   final n = difficulty.size;
@@ -154,7 +153,7 @@ CrosswordPuzzle? generateCrossword(
       maxAnchors: difficulty.maxAnchors,
       slots: slots,
     );
-    final (preAssigned, anchorsUsed) = fitAnchors(anchors, slots);
+    final (preAssigned, anchorsUsed) = fitAnchors(anchors, slots, rng: rng);
 
     if (insistOnSrs) {
       final srsTexts = {for (final e in srsCandidates) e.text};
@@ -173,7 +172,9 @@ CrosswordPuzzle? generateCrossword(
       rng: rng,
       preAssigned: preAssigned,
       recentUsage: request.recentUsage,
-      timeBudget: perSolveBudget < remainingBudget ? perSolveBudget : remainingBudget,
+      timeBudget: difficulty.solveBudget < remainingBudget
+          ? difficulty.solveBudget
+          : remainingBudget,
     );
     final result = solver.solve();
     if (result == null) continue;

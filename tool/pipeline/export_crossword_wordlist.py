@@ -38,7 +38,7 @@ import time
 from collections import defaultdict
 
 try:
-    from wordfreq import zipf_frequency
+    from wordfreq import tokenize, zipf_frequency
 except ImportError:  # pragma: no cover - operator-facing
     sys.exit("Missing dependency: pip install wordfreq")
 
@@ -89,6 +89,23 @@ ACRONYM_PENALTY = 3.5
 
 ABBREVIATION_GLOSS = re.compile(
     r"^(?:Abbreviation|Initialism|Acronym|Clipping|Ellipsis) of ", re.IGNORECASE
+)
+
+# Entries that exist only as a variant of some other spelling. An
+# abbreviation is a legitimate crossword answer with a legitimate clue
+# ("Federal Bureau of Investigation, for short"); a variant spelling is
+# neither. Its only available clue is a pointer at the word it varies from,
+# which is how a 5x5 grid ended up cluing USUN as "Alternative form of ussun"
+# and SURAH as "Alternative spelling of sura".
+#
+# "Synonym of X" is deliberately absent: that one *is* a good clue, and the
+# clue pipeline already rewrites it into a bare synonym.
+VARIANT_GLOSS = re.compile(
+    r"^(?:Alternative|Alt\.?|Obsolete|Archaic|Dated|Nonstandard|Non-standard|"
+    r"Informal|Rare|Eye|Pronunciation|Common|Deliberate)\s+"
+    r"(?:form|spelling|misspelling|dialect|dialectal spelling|letter-case form)\s+of\b"
+    r"|^(?:Misspelling|Eye dialect|Pronunciation spelling|Superseded spelling)\s+of\b",
+    re.IGNORECASE,
 )
 
 # Wiktionary orders senses with the primary meaning first; the app's clue
@@ -167,21 +184,31 @@ def grid_text(headword: str) -> str | None:
     doesn't belong in the pool at all.
 
     Apostrophes are dropped (DONT for "don't", the spec's `text` vs `display`
-    split, §2). Multi-word and hyphenated headwords are rejected outright,
-    which needs justifying because Wiktionary has 148k of them and they look
-    like exactly the "phrases, idioms, titles" §A.2 requirement 13 asks for.
+    split, §2).
 
-    The problem is that nothing here can tell a real idiom from a random
-    Wiktionary compound. `wordfreq` scores a multi-token string by combining
-    its parts, so it reports "turtle-footed" at Zipf 3.20 and "front butt" at
-    4.24 — higher than "propeller" — and every frequency-based filter that
-    admits "house of cards" admits those too. The reference implementation
-    reaches the same conclusion from the other direction: its base list is
-    ENABLE1, which is single words only, and every one of its ~80 phrases is
-    hand-curated (§13). A curated supplement is the supported way to add
-    them; an automatic frequency test is not.
+    The hard rule is that **`wordfreq` must recognise the headword as a single
+    token**, because otherwise its Zipf score is not an observation at all.
+    Given a string it can't tokenize as one word, `wordfreq` splits it and
+    combines the parts, and the combination runs *high*: "turtle-footed" comes
+    back at 3.20 and "front butt" at 4.24, above "propeller". Every
+    frequency-based filter that admits "house of cards" admits those too.
+
+    Apostrophe forms are the subtle case and cost a shipped puzzle to find.
+    `tokenize` keeps the contractions it knows whole — "don't" 6.20,
+    "o'clock" 4.04, "can't" 5.80 — but splits the ones it doesn't, so
+    "us'un" scores 4.60 off `us` + `un` and "g'hal" 3.65 off `g` + `hal`.
+    Both duly outscored MUSE (3.59) and landed in a 5x5 grid. Asking
+    `tokenize` directly replaces three hand-rolled rules (no spaces, no
+    hyphens, apostrophes are fine) with the one criterion they were all
+    approximating.
+
+    This leaves the word list single-word, which is also where the reference
+    implementation lands from the other direction: its base list is ENABLE1,
+    and every one of its ~80 phrases is hand-curated (§13). A curated
+    supplement is the supported way to add phrases; an automatic frequency
+    test is not.
     """
-    if " " in headword or "-" in headword:
+    if len(tokenize(headword, "en")) != 1:
         return None
     stripped = STRIP.sub("", headword)
     if not PURE_ALPHA.match(stripped):
@@ -266,6 +293,12 @@ def main() -> None:
         # only ever be clued by spelling itself out.
         is_acronym = bool(glosses) and all(
             ABBREVIATION_GLOSS.match(g) for g in glosses)
+
+        # Dropped outright rather than scored down: unlike an abbreviation,
+        # a variant spelling has no clue that isn't a pointer at another
+        # word, so there is no score at which it becomes usable fill.
+        if glosses and all(VARIANT_GLOSS.match(g) for g in glosses):
+            continue
 
         # Apostrophe forms only, now that multi-word headwords are gone —
         # DONT/"don't" is the surviving case of the spec's text-vs-display

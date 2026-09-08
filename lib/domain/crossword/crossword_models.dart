@@ -32,6 +32,7 @@ enum CrosswordDifficulty {
     whiteTarget: 0.84,
     maxAnchors: 1,
     overallBudget: Duration(seconds: 15),
+    solveBudget: Duration(seconds: 3),
   ),
   midi(
     label: 'Midi',
@@ -40,6 +41,7 @@ enum CrosswordDifficulty {
     whiteTarget: 0.78,
     maxAnchors: 2,
     overallBudget: Duration(seconds: 25),
+    solveBudget: Duration(seconds: 3),
   ),
   mega(
     label: 'Mega',
@@ -48,6 +50,7 @@ enum CrosswordDifficulty {
     whiteTarget: 0.72,
     maxAnchors: 3,
     overallBudget: Duration(seconds: 60),
+    solveBudget: Duration(milliseconds: 1500),
   );
 
   final String label;
@@ -73,6 +76,18 @@ enum CrosswordDifficulty {
   /// background isolate, once a day.
   final Duration overallBudget;
 
+  /// Wall clock for a single solve, well under the spec's flat 8s.
+  ///
+  /// Solve times here are sharply bimodal: a skeleton that can be filled is
+  /// filled in 20-350ms, and one that can't still hasn't been at 8s. Spending
+  /// the full 8s before giving up therefore buys almost nothing and costs the
+  /// attempt budget — at 8s a Mega generation fits about seven skeletons into
+  /// its minute and failed 2 in 12. A short budget converts that same minute
+  /// into several times as many skeletons, which is where the wins actually
+  /// come from. Mega gets the shortest budget because it is the size that
+  /// runs out of wall clock.
+  final Duration solveBudget;
+
   const CrosswordDifficulty({
     required this.label,
     required this.size,
@@ -80,6 +95,7 @@ enum CrosswordDifficulty {
     required this.whiteTarget,
     required this.maxAnchors,
     required this.overallBudget,
+    required this.solveBudget,
   });
 
   String get storageKey => name;
