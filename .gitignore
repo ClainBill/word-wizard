@@ -63,3 +63,8 @@ tool/pipeline/out/dictionary-full.db
 assets/db/dictionary.db
 tool/pipeline/raw/
 tool/pipeline/out/dictionary-full.db
+
+# Claude Code scratch: worktrees are full checkouts of this repo, and the
+# local settings file is per-machine.
+.claude/worktrees/
+.claude/settings.local.json
