@@ -29,8 +29,9 @@ test/           SM-2 engine unit tests
 
 ## Rebuilding the dictionary database
 
-The bundled `assets/db/dictionary-core.db` is generated, not hand-written.
-To rebuild it:
+**`assets/db/dictionary.db` is not in this repository and the app will not
+run without it.** It is a ~400 MB generated artifact — GitHub refuses files
+over 100 MB — so it is gitignored and has to be built locally once:
 
 ```
 cd tool/pipeline
@@ -38,11 +39,33 @@ python3 -m pip install wordfreq
 curl -L -o raw/kaikki-english.jsonl \
   https://kaikki.org/dictionary/English/kaikki.org-dictionary-English.jsonl
 python3 build_dictionary.py --input raw/kaikki-english.jsonl --out out/
-cp out/dictionary-core.db ../../assets/db/dictionary-core.db
+cp out/dictionary-full.db ../../assets/db/dictionary.db
 ```
 
-If you only changed `ADVANCED_VOCAB_SEED` or `--core-size` and already have
+`out/dictionary-core.db` is a smaller frequency-ranked subset kept for dev
+use; the app itself loads the full database. If you only changed
+`ADVANCED_VOCAB_SEED` or `--core-size` and already have
 `out/dictionary-full.db`, skip the slow re-parse with `--core-only`.
+
+## Rebuilding the crossword word list
+
+`assets/crossword/wordlist.tsv` **is** committed (1.7 MB), so this is only
+needed if you change the scoring. It is the scored, filtered word pool the
+crossword generator searches — see `PORTING_SPEC.md` §1-§2 for why all the
+natural-language work happens offline and the runtime gets a static asset:
+
+```
+python3 -m pip install wordfreq
+python3 tool/pipeline/export_crossword_wordlist.py \
+  --db assets/db/dictionary.db --out assets/crossword/wordlist.tsv
+```
+
+To check the generator after a change — fill success, timings, grid density
+and quality-gate offenders per size:
+
+```
+dart run tool/crossword_bench.dart 10
+```
 
 ## Running
 
