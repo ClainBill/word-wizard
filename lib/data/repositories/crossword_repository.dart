@@ -213,8 +213,18 @@ class CrosswordRepository {
         .get();
     final answers = <String>{};
     for (final row in rows) {
-      final puzzle = CrosswordPuzzle.fromJson(jsonDecode(row.gridJson) as Map<String, dynamic>);
-      answers.addAll(puzzle.words.map((w) => w.answer));
+      // Never let a historical row stop today's puzzle being built. This is
+      // the only place generation reads back puzzles the app wrote in earlier
+      // versions, so it is the one place where a schema drift that was
+      // harmless when it happened turns into "no crossword, ever" — which is
+      // exactly what a missing `entryId` on year-old rows did. Repeat
+      // avoidance is a nicety; shipping a puzzle is not.
+      try {
+        final puzzle = CrosswordPuzzle.fromJson(jsonDecode(row.gridJson) as Map<String, dynamic>);
+        answers.addAll(puzzle.words.map((w) => w.answer));
+      } catch (_) {
+        continue;
+      }
     }
     return answers;
   }

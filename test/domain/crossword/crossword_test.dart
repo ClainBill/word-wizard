@@ -346,6 +346,74 @@ void main() {
     });
   });
 
+  group('saved puzzle compatibility', () {
+    // Real installs carry rows written by app versions that predate fields
+    // the model now has. Generation reads the last ten stored puzzles back to
+    // avoid repeating answers, so a row it cannot parse stops the user
+    // getting a crossword at all — which is what shipped, until an
+    // `entryId`-less row from an older build threw "type 'Null' is not a
+    // subtype of type 'int'" on a phone that had been running the app for a
+    // week.
+    test('a row written before entryId existed still parses', () {
+      final legacy = {
+        'width': 7,
+        'height': 7,
+        'words': [
+          {
+            'number': 1,
+            'direction': 'across',
+            'row': 0,
+            'col': 0,
+            'answer': 'PEDDLER',
+            'clue': 'A travelling seller.',
+          },
+        ],
+      };
+
+      final puzzle = CrosswordPuzzle.fromJson(legacy);
+
+      expect(puzzle.width, 7);
+      expect(puzzle.words.single.answer, 'PEDDLER');
+      // -1 is the generator's own "no dictionary row behind this word" value,
+      // and clue lookup skips it.
+      expect(puzzle.words.single.entryId, -1);
+      expect(puzzle.words.single.fromStudyPool, isFalse);
+    });
+
+    test('a round trip through toJson preserves every field', () {
+      const original = CrosswordPuzzle(
+        width: 5,
+        height: 5,
+        words: [
+          CrosswordWordPlacement(
+            number: 1,
+            direction: CrosswordDirection.down,
+            row: 0,
+            col: 0,
+            answer: 'MUSE',
+            entryId: 10206,
+            clue: 'A source of inspiration.',
+            fromStudyPool: true,
+          ),
+        ],
+        themeName: 'animals',
+        themeKind: 'hidden_word',
+        qualityScore: 13.5,
+      );
+
+      final restored = CrosswordPuzzle.fromJson(original.toJson());
+
+      expect(restored.themeName, 'animals');
+      expect(restored.themeKind, 'hidden_word');
+      expect(restored.qualityScore, 13.5);
+      final word = restored.words.single;
+      expect(word.entryId, 10206);
+      expect(word.fromStudyPool, isTrue);
+      expect(word.direction, CrosswordDirection.down);
+      expect(word.clue, 'A source of inspiration.');
+    });
+  });
+
   group('isolate boundary', () {
     // The app never calls generateCrossword directly: CrosswordRepository
     // hands a CrosswordIsolateRequest to Isolate.run, which refuses anything

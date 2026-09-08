@@ -239,10 +239,16 @@ class CrosswordWordPlacement {
         row: json['row'] as int,
         col: json['col'] as int,
         answer: json['answer'] as String,
-        entryId: json['entryId'] as int,
-        clue: json['clue'] as String,
-        // Absent on puzzles saved before this field existed — treat as
-        // generic filler rather than failing to parse the saved puzzle.
+        // Absent on puzzles saved before this field existed, which is not
+        // hypothetical — real installs carry rows from an app version that
+        // never wrote it, and casting straight to int threw
+        // "type 'Null' is not a subtype of type 'int'" for every one of them.
+        // -1 is the same "no dictionary row behind this word" value the
+        // generator uses, and clue lookup already skips it.
+        entryId: json['entryId'] as int? ?? -1,
+        clue: json['clue'] as String? ?? '',
+        // Likewise absent on older rows — treat as generic filler rather than
+        // failing to parse the saved puzzle.
         fromStudyPool: json['fromStudyPool'] as bool? ?? false,
       );
 }
