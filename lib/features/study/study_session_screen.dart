@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/providers.dart';
 import '../../domain/models/study_card.dart';
 import '../../domain/srs/sm2.dart';
+import '../../services/feature_clues_service.dart';
 import '../../widgets/ipa_label.dart';
 import '../../widgets/pos_tag.dart';
 import '../../widgets/tappable_word_text.dart';
@@ -25,10 +26,19 @@ class StudySessionScreen extends ConsumerStatefulWidget {
   ConsumerState<StudySessionScreen> createState() => _StudySessionScreenState();
 }
 
+/// Where a card currently sits in the flip sequence:
+/// front (word only) -> ask ("did you know it?", word covered back up) ->
+/// game (only on "no" - a blind recall jog, word still covered) -> back
+/// (meaning revealed, grade buttons shown). "Yes" on the ask step skips
+/// straight from ask to back.
+enum _Stage { front, ask, game, back }
+
 class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
   int _index = 0;
-  bool _revealed = false;
+  _Stage _stage = _Stage.front;
   List<StudyCard>? _queue;
+  final List<StudyCard> _missed = [];
+  bool _missedRoundDone = false;
 
   @override
   Widget build(BuildContext context) {
@@ -41,19 +51,31 @@ class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
           _queue ??= queue;
           final cards = _queue!;
           if (cards.isEmpty) return _SessionDone(total: 0);
-          if (_index >= cards.length) return _SessionDone(total: cards.length);
+          if (_index >= cards.length) {
+            if (_missed.length >= 2 && !_missedRoundDone) {
+              return _MissedWordsRound(
+                cards: _missed,
+                onDone: () => setState(() => _missedRoundDone = true),
+              );
+            }
+            return _SessionDone(total: cards.length);
+          }
           return _CardView(
             card: cards[_index],
             index: _index,
             total: cards.length,
-            revealed: _revealed,
-            onReveal: () => setState(() => _revealed = true),
+            stage: _stage,
+            onReveal: () => setState(() => _stage = _Stage.ask),
+            onKnewIt: () => setState(() => _stage = _Stage.back),
+            onDidntKnowIt: () => setState(() => _stage = _Stage.game),
+            onGameDone: () => setState(() => _stage = _Stage.back),
             onGrade: (grade) async {
+              if (grade == Grade.again) _missed.add(cards[_index]);
               await ref.read(studyRepositoryProvider).grade(cards[_index], grade);
               ref.invalidate(dueCountProvider);
               setState(() {
                 _index += 1;
-                _revealed = false;
+                _stage = _Stage.front;
               });
             },
             onRemove: () async {
@@ -82,7 +104,7 @@ class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
               ref.invalidate(dueCountProvider);
               setState(() {
                 _queue = List.of(cards)..removeAt(_index);
-                _revealed = false;
+                _stage = _Stage.front;
               });
             },
           );
@@ -98,8 +120,11 @@ class _CardView extends StatelessWidget {
   final StudyCard card;
   final int index;
   final int total;
-  final bool revealed;
+  final _Stage stage;
   final VoidCallback onReveal;
+  final VoidCallback onKnewIt;
+  final VoidCallback onDidntKnowIt;
+  final VoidCallback onGameDone;
   final void Function(Grade) onGrade;
   final VoidCallback onRemove;
 
@@ -107,8 +132,11 @@ class _CardView extends StatelessWidget {
     required this.card,
     required this.index,
     required this.total,
-    required this.revealed,
+    required this.stage,
     required this.onReveal,
+    required this.onKnewIt,
+    required this.onDidntKnowIt,
+    required this.onGameDone,
     required this.onGrade,
     required this.onRemove,
   });
@@ -153,11 +181,31 @@ class _CardView extends StatelessWidget {
         ),
         Expanded(
           child: GestureDetector(
-            onTap: revealed ? () => showWordDetailSheet(context, card.headword) : onReveal,
-            onVerticalDragEnd: (details) {
-              final velocity = details.primaryVelocity ?? 0;
-              if (velocity < -250) showWordDetailSheet(context, card.headword);
+            onTap: switch (stage) {
+              _Stage.front => onReveal,
+              _Stage.back => () => showWordDetailSheet(context, card.headword),
+              _Stage.ask || _Stage.game => null,
             },
+            onVerticalDragEnd: stage == _Stage.back
+                ? (details) {
+                    final velocity = details.primaryVelocity ?? 0;
+                    if (velocity < -250) showWordDetailSheet(context, card.headword);
+                  }
+                : null,
+            // A faster alternative to tap-then-choose on the front: swipe
+            // right to skip straight past the ask step and the game (same
+            // as answering "Yes"), swipe left to skip straight into the
+            // recall game (same as answering "No, jog my memory").
+            onHorizontalDragEnd: stage == _Stage.front
+                ? (details) {
+                    final velocity = details.primaryVelocity ?? 0;
+                    if (velocity > 250) {
+                      onKnewIt();
+                    } else if (velocity < -250) {
+                      onDidntKnowIt();
+                    }
+                  }
+                : null,
             behavior: HitTestBehavior.opaque,
             child: LayoutBuilder(
               builder: (context, constraints) => SingleChildScrollView(
@@ -168,48 +216,77 @@ class _CardView extends StatelessWidget {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(card.headword, style: Theme.of(context).textTheme.headlineMedium),
+                        Text(
+                          stage == _Stage.ask || stage == _Stage.game
+                              ? _maskHeadword(card.headword)
+                              : card.headword,
+                          style: Theme.of(context).textTheme.headlineMedium,
+                        ),
                         const SizedBox(height: 6),
                         IpaLabel(card.ipa),
                         const SizedBox(height: 8),
                         PosTag(card.pos),
                         const SizedBox(height: 20),
-                        if (!revealed)
-                          Text(
-                            'Tap to reveal',
-                            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
-                          )
-                        else ...[
-                          if (card.gloss != null)
-                            TappableWordText(card.gloss!, textAlign: TextAlign.center),
-                          if (card.example != null) ...[
-                            const SizedBox(height: 8),
-                            TappableWordText(
-                              '"${card.example}"',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontStyle: FontStyle.italic,
-                                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                              ),
+                        switch (stage) {
+                          _Stage.front => Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'Tap to reveal',
+                                  style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Swipe left to jog your memory, right to skip straight to the answer',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                          if (card.note != null && card.note!.trim().isNotEmpty) ...[
-                            const SizedBox(height: 16),
-                            Divider(color: Theme.of(context).colorScheme.outlineVariant),
-                            const SizedBox(height: 8),
-                            MarkdownBody(data: card.note!, shrinkWrap: true),
-                          ],
-                          const SizedBox(height: 20),
-                          Text(
-                            'Tap or swipe up for the full card',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                          _Stage.ask => _KnowItPrompt(onKnewIt: onKnewIt, onDidntKnowIt: onDidntKnowIt),
+                          _Stage.game => _PreRevealGame(
+                              key: ValueKey(card.cardId),
+                              card: card,
+                              onDone: onGameDone,
                             ),
-                          ),
-                          const SizedBox(height: 16),
-                          _ComprehensionExercise(key: ValueKey(card.cardId), card: card),
-                        ],
+                          _Stage.back => Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (card.gloss != null)
+                                  TappableWordText(card.gloss!, textAlign: TextAlign.center),
+                                if (card.example != null) ...[
+                                  const SizedBox(height: 8),
+                                  TappableWordText(
+                                    '"${card.example}"',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontStyle: FontStyle.italic,
+                                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                                if (card.note != null && card.note!.trim().isNotEmpty) ...[
+                                  const SizedBox(height: 16),
+                                  Divider(color: Theme.of(context).colorScheme.outlineVariant),
+                                  const SizedBox(height: 8),
+                                  MarkdownBody(data: card.note!, shrinkWrap: true),
+                                ],
+                                const SizedBox(height: 20),
+                                Text(
+                                  'Tap or swipe up for the full card',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                _ComprehensionExercise(key: ValueKey(card.cardId), card: card),
+                              ],
+                            ),
+                        },
                       ],
                     ),
                   ),
@@ -218,7 +295,7 @@ class _CardView extends StatelessWidget {
             ),
           ),
         ),
-        if (revealed)
+        if (stage == _Stage.back)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
             child: Row(
@@ -235,6 +312,11 @@ class _CardView extends StatelessWidget {
       ],
     );
   }
+
+  /// Covers the headword back up once the "did you know it?" step starts —
+  /// letters become underscores, spaces and punctuation stay put so a
+  /// two-word headword still reads as two blanked words.
+  static String _maskHeadword(String headword) => headword.replaceAll(RegExp(r'[A-Za-z]'), '_');
 }
 
 class _GradeButton extends StatelessWidget {
@@ -510,6 +592,671 @@ class _LetterChip extends StatelessWidget {
             fontSize: 13,
             fontWeight: FontWeight.w600,
             color: used ? scheme.onSurfaceVariant.withValues(alpha: 0.4) : null,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The "did you know it?" fork shown right after the front is tapped, before
+/// anything about the meaning appears. "Yes" skips straight to the back;
+/// "no" covers the word back up and runs [_PreRevealGame] first.
+class _KnowItPrompt extends StatelessWidget {
+  final VoidCallback onKnewIt;
+  final VoidCallback onDidntKnowIt;
+
+  const _KnowItPrompt({required this.onKnewIt, required this.onDidntKnowIt});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('Did you know it?', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 14),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            OutlinedButton(onPressed: onKnewIt, child: const Text('Yes')),
+            const SizedBox(width: 12),
+            FilledButton.tonal(onPressed: onDidntKnowIt, child: const Text('Jog my memory')),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+enum _RecallKind { cloze, reveal, rhyme, feature }
+
+/// A blind, few-seconds recall game shown only after admitting you didn't
+/// know the word — the headword stays covered the whole time. Never blocks
+/// or affects grading; "Skip" (or finishing the game) both just move on to
+/// the real back of the card. Picks randomly among whichever kinds this
+/// card actually has the data for.
+class _PreRevealGame extends StatefulWidget {
+  final StudyCard card;
+  final VoidCallback onDone;
+
+  const _PreRevealGame({super.key, required this.card, required this.onDone});
+
+  @override
+  State<_PreRevealGame> createState() => _PreRevealGameState();
+}
+
+class _PreRevealGameState extends State<_PreRevealGame> {
+  static final _pureAlpha = RegExp(r'^[A-Za-z]+$');
+  // Wiktionary examples range from a short invented sentence to a full
+  // quoted paragraph (seen live on "serendipity": Horace Walpole's ~1300-
+  // character coinage letter) — fine as a citation, unusable as a few-
+  // seconds recall game. Same cap concern as crosswordClueOptions' single-
+  // line clues, just a little more generous since this is a full screen's
+  // only content rather than one line among several options.
+  static const _maxClozeLength = 220;
+
+  late final _RecallKind _kind;
+  RegExp? _clozePattern;
+
+  @override
+  void initState() {
+    super.initState();
+    final headword = widget.card.headword;
+    final example = widget.card.example;
+    if (example != null && example.length <= _maxClozeLength) {
+      final pattern = RegExp(r'\b' + RegExp.escape(headword) + r'\b', caseSensitive: false);
+      if (pattern.hasMatch(example)) _clozePattern = pattern;
+    }
+
+    final canRhyme = _pureAlpha.hasMatch(headword) && headword.length >= 3;
+    // Only offered when an OpenAI key was baked in at build time (a debug
+    // build run with --dart-define-from-file=.env) — see
+    // FeatureCluesService.isConfigured. Absent that, this kind just never
+    // enters the pool, the same as a card with no example sentence skipping
+    // "cloze".
+    final canFeature = widget.card.gloss != null && const FeatureCluesService().isConfigured;
+    final kinds = [
+      if (_clozePattern != null) _RecallKind.cloze,
+      _RecallKind.reveal,
+      if (canRhyme) _RecallKind.rhyme,
+      if (canFeature) _RecallKind.feature,
+    ];
+    _kind = kinds[Random().nextInt(kinds.length)];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.lightbulb_outline, size: 14, color: scheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                switch (_kind) {
+                  _RecallKind.cloze => 'Fill in the blank',
+                  _RecallKind.reveal => 'Letter by letter',
+                  _RecallKind.rhyme => 'Sound it out',
+                  _RecallKind.feature => 'Guess from the clues',
+                },
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: scheme.primary),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: widget.onDone,
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+                child: const Text('Skip', style: TextStyle(fontSize: 11)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          switch (_kind) {
+            _RecallKind.cloze =>
+              _ClozeGame(card: widget.card, pattern: _clozePattern!, onDone: widget.onDone),
+            _RecallKind.reveal => _RevealGame(card: widget.card, onDone: widget.onDone),
+            _RecallKind.rhyme => _RhymeGame(card: widget.card, onDone: widget.onDone),
+            _RecallKind.feature => _FeatureCluesGame(card: widget.card, onDone: widget.onDone),
+          },
+        ],
+      ),
+    );
+  }
+}
+
+/// Blanks the headword out of its own example sentence and asks for it back
+/// — recall grounded in real usage rather than an abstract definition.
+class _ClozeGame extends StatelessWidget {
+  final StudyCard card;
+  final RegExp pattern;
+  final VoidCallback onDone;
+
+  const _ClozeGame({required this.card, required this.pattern, required this.onDone});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final blanked = card.example!.replaceAll(pattern, '_____');
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '"$blanked"',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, fontStyle: FontStyle.italic, color: scheme.onSurfaceVariant),
+        ),
+        const SizedBox(height: 10),
+        _GuessField(target: card.headword, onDone: onDone, hintText: 'What goes in the blank?'),
+      ],
+    );
+  }
+}
+
+/// Hangman-lite: starts fully blanked, a tap reveals one more letter (up to
+/// all-but-the-last), turning the classic word-finding cueing hierarchy
+/// into one continuous slider instead of a fixed hint.
+class _RevealGame extends StatefulWidget {
+  final StudyCard card;
+  final VoidCallback onDone;
+
+  const _RevealGame({required this.card, required this.onDone});
+
+  @override
+  State<_RevealGame> createState() => _RevealGameState();
+}
+
+class _RevealGameState extends State<_RevealGame> {
+  static final _alpha = RegExp(r'[A-Za-z]');
+  int _revealedCount = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final word = widget.card.headword;
+    final shown = StringBuffer();
+    for (var i = 0; i < word.length; i++) {
+      final ch = word[i];
+      shown.write(!_alpha.hasMatch(ch) || i < _revealedCount ? ch : '_');
+    }
+    final alphaCount = word.replaceAll(RegExp('[^A-Za-z]'), '').length;
+    final canRevealMore = _revealedCount < alphaCount - 1;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          shown.toString().split('').join(' '),
+          style: const TextStyle(fontSize: 18, letterSpacing: 2, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        TextButton.icon(
+          onPressed: canRevealMore ? () => setState(() => _revealedCount++) : null,
+          icon: const Icon(Icons.visibility_outlined, size: 14),
+          label: Text(
+            canRevealMore ? 'Reveal a letter' : 'No more hints',
+            style: const TextStyle(fontSize: 11),
+          ),
+          style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+        ),
+        const SizedBox(height: 4),
+        _GuessField(target: word, onDone: widget.onDone, hintText: 'Type the word'),
+      ],
+    );
+  }
+}
+
+/// Phonological cues only — syllable count, first letter, and (best-effort)
+/// a common real word that sounds like it — deliberately nothing about
+/// meaning. Tip-of-the-tongue research suggests this kind of cue resolves a
+/// stuck recall better than another meaning-based hint would.
+class _RhymeGame extends ConsumerStatefulWidget {
+  final StudyCard card;
+  final VoidCallback onDone;
+
+  const _RhymeGame({required this.card, required this.onDone});
+
+  @override
+  ConsumerState<_RhymeGame> createState() => _RhymeGameState();
+}
+
+class _RhymeGameState extends ConsumerState<_RhymeGame> {
+  String? _rhyme;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    ref
+        .read(searchRepositoryProvider)
+        .similarSoundingWord(widget.card.entryId, widget.card.headword)
+        .then((word) {
+      if (!mounted) return;
+      setState(() {
+        _rhyme = word;
+        _loaded = true;
+      });
+    });
+  }
+
+  static int _estimateSyllables(String word) {
+    final w = word.toLowerCase().replaceAll(RegExp('[^a-z]'), '');
+    if (w.isEmpty) return 1;
+    var count = RegExp('[aeiouy]+').allMatches(w).length;
+    if (w.endsWith('e') && !w.endsWith('le') && count > 1) count -= 1;
+    return count < 1 ? 1 : count;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final word = widget.card.headword;
+    final syllables = _estimateSyllables(word);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'Starts with "${word[0].toUpperCase()}" • $syllables syllable${syllables == 1 ? '' : 's'}',
+          style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+        ),
+        const SizedBox(height: 6),
+        if (!_loaded)
+          const SizedBox(height: 20, child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
+        else if (_rhyme != null)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Rhymes with "$_rhyme"', style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant)),
+              IconButton(
+                icon: const Icon(Icons.volume_up_outlined, size: 16),
+                tooltip: 'Hear it',
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(),
+                padding: const EdgeInsets.only(left: 4),
+                onPressed: () => ref.read(ttsProvider).speak(_rhyme!),
+              ),
+            ],
+          ),
+        const SizedBox(height: 8),
+        _GuessField(target: word, onDone: widget.onDone, hintText: 'Type the word'),
+      ],
+    );
+  }
+}
+
+/// LLM-generated semantic-feature clues (see [FeatureCluesService]) — 2-3
+/// short clues that circle the word's meaning (category, an association, a
+/// near-synonym) without ever paraphrasing the definition or naming the
+/// word, so answering genuinely requires recall rather than recognition.
+/// Only reachable when [FeatureCluesService.isConfigured] gated this kind
+/// into the pool in the first place, but the network call itself can still
+/// fail — that's handled here, not upstream, since it's only known after
+/// the request actually runs.
+class _FeatureCluesGame extends StatefulWidget {
+  final StudyCard card;
+  final VoidCallback onDone;
+
+  const _FeatureCluesGame({required this.card, required this.onDone});
+
+  @override
+  State<_FeatureCluesGame> createState() => _FeatureCluesGameState();
+}
+
+class _FeatureCluesGameState extends State<_FeatureCluesGame> {
+  static const _service = FeatureCluesService();
+  List<String>? _clues;
+
+  @override
+  void initState() {
+    super.initState();
+    _service
+        .clues(headword: widget.card.headword, pos: widget.card.pos, gloss: widget.card.gloss ?? '')
+        .then((clues) {
+      if (!mounted) return;
+      setState(() => _clues = clues);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final clues = _clues;
+    if (clues == null) {
+      return const SizedBox(
+        height: 60,
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+    if (clues.isEmpty) {
+      // The call failed, timed out, or every clue it returned leaked the
+      // headword and got filtered out — nothing usable to show, so hand
+      // straight back to the real card rather than leave a dead end.
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            "Couldn't load a hint for this one.",
+            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: widget.onDone,
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+            child: const Text('Continue', style: TextStyle(fontSize: 12)),
+          ),
+        ],
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final clue in clues)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3),
+            child: Text('• $clue', textAlign: TextAlign.center, style: const TextStyle(fontSize: 13)),
+          ),
+        const SizedBox(height: 10),
+        _GuessField(target: widget.card.headword, onDone: widget.onDone, hintText: 'What word is it?'),
+      ],
+    );
+  }
+}
+
+/// Shared type-a-guess-and-check control used by every [_PreRevealGame]
+/// variant — never gates anything, just gives a moment of generative recall
+/// before the "Continue" hands back to the real card.
+class _GuessField extends StatefulWidget {
+  final String target;
+  final VoidCallback onDone;
+  final String hintText;
+
+  const _GuessField({required this.target, required this.onDone, required this.hintText});
+
+  @override
+  State<_GuessField> createState() => _GuessFieldState();
+}
+
+class _GuessFieldState extends State<_GuessField> {
+  final _controller = TextEditingController();
+  bool _checked = false;
+  bool _correct = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _check() {
+    final guess = _controller.text.trim().toLowerCase();
+    setState(() {
+      _checked = true;
+      _correct = guess.isNotEmpty && guess == widget.target.trim().toLowerCase();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextField(
+          controller: _controller,
+          enabled: !_checked,
+          textAlign: TextAlign.center,
+          onSubmitted: (_) {
+            if (!_checked) _check();
+          },
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: widget.hintText,
+            hintStyle: const TextStyle(fontSize: 12),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            filled: _checked,
+            fillColor: _checked ? (_correct ? Colors.green : Colors.red).withValues(alpha: 0.12) : null,
+          ),
+          style: const TextStyle(fontSize: 14),
+        ),
+        const SizedBox(height: 8),
+        if (!_checked)
+          FilledButton.tonal(
+            onPressed: _check,
+            style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+            child: const Text('Check', style: TextStyle(fontSize: 12)),
+          )
+        else
+          Wrap(
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            children: [
+              Icon(
+                _correct ? Icons.check_circle_outline : Icons.cancel_outlined,
+                size: 16,
+                color: _correct ? Colors.green : Colors.red,
+              ),
+              Text(
+                _correct ? 'Got it!' : 'That\'s okay — it\'s next.',
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+              ),
+              TextButton(
+                onPressed: widget.onDone,
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                child: const Text('Continue', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+/// A session-end matching round pairing every word marked "Again" this
+/// session against its definition — same mechanic as Quizlet's "Match"
+/// mode. Only shown when there's more than one miss; capped at
+/// [_maxPairs] so it stays a 20-30s round instead of growing with the
+/// session.
+class _MissedWordsRound extends StatefulWidget {
+  final List<StudyCard> cards;
+  final VoidCallback onDone;
+
+  const _MissedWordsRound({required this.cards, required this.onDone});
+
+  @override
+  State<_MissedWordsRound> createState() => _MissedWordsRoundState();
+}
+
+class _MissedWordsRoundState extends State<_MissedWordsRound> {
+  static const _maxPairs = 6;
+
+  late final List<StudyCard> _pairs;
+  late final List<StudyCard> _wordOrder;
+  late final List<StudyCard> _glossOrder;
+  final Set<int> _matched = {};
+  int? _selectedWordId;
+  int? _selectedGlossId;
+  int? _wrongFlashWordId;
+  int? _wrongFlashGlossId;
+
+  @override
+  void initState() {
+    super.initState();
+    final withGloss = widget.cards.where((c) => c.gloss != null && c.gloss!.trim().isNotEmpty).toList()
+      ..shuffle();
+    _pairs = withGloss.take(_maxPairs).toList();
+    _wordOrder = List.of(_pairs)..shuffle();
+    _glossOrder = List.of(_pairs)..shuffle();
+  }
+
+  void _tryMatch() {
+    if (_selectedWordId == null || _selectedGlossId == null) return;
+    if (_selectedWordId == _selectedGlossId) {
+      final matchedId = _selectedWordId!;
+      setState(() {
+        _matched.add(matchedId);
+        _selectedWordId = null;
+        _selectedGlossId = null;
+      });
+      return;
+    }
+    final wrongWord = _selectedWordId;
+    final wrongGloss = _selectedGlossId;
+    setState(() {
+      _wrongFlashWordId = wrongWord;
+      _wrongFlashGlossId = wrongGloss;
+    });
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+      setState(() {
+        _selectedWordId = null;
+        _selectedGlossId = null;
+        _wrongFlashWordId = null;
+        _wrongFlashGlossId = null;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final allMatched = _matched.length == _pairs.length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+      child: Column(
+        children: [
+          Icon(Icons.grid_view_outlined, size: 32, color: scheme.primary),
+          const SizedBox(height: 8),
+          Text('Match what you missed', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text(
+            'A quick round with the ${_pairs.length} word${_pairs.length == 1 ? '' : 's'} you marked '
+            '"Again" this session.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 16),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      children: [
+                        for (final c in _wordOrder)
+                          _MatchTile(
+                            text: c.headword,
+                            matched: _matched.contains(c.cardId),
+                            selected: _selectedWordId == c.cardId,
+                            wrong: _wrongFlashWordId == c.cardId,
+                            onTap: _matched.contains(c.cardId)
+                                ? null
+                                : () {
+                                    setState(() => _selectedWordId = c.cardId);
+                                    _tryMatch();
+                                  },
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: Column(
+                      children: [
+                        for (final c in _glossOrder)
+                          _MatchTile(
+                            text: c.gloss!,
+                            matched: _matched.contains(c.cardId),
+                            selected: _selectedGlossId == c.cardId,
+                            wrong: _wrongFlashGlossId == c.cardId,
+                            onTap: _matched.contains(c.cardId)
+                                ? null
+                                : () {
+                                    setState(() => _selectedGlossId = c.cardId);
+                                    _tryMatch();
+                                  },
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (allMatched)
+            FilledButton(onPressed: widget.onDone, child: const Text('Done'))
+          else
+            TextButton(onPressed: widget.onDone, child: const Text('Skip')),
+        ],
+      ),
+    );
+  }
+}
+
+class _MatchTile extends StatelessWidget {
+  final String text;
+  final bool matched;
+  final bool selected;
+  final bool wrong;
+  final VoidCallback? onTap;
+
+  const _MatchTile({
+    required this.text,
+    required this.matched,
+    required this.selected,
+    required this.wrong,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    Color border = scheme.outlineVariant;
+    Color? bg;
+    if (matched) {
+      border = Colors.green;
+      bg = Colors.green.withValues(alpha: 0.1);
+    } else if (wrong) {
+      border = Colors.red;
+      bg = Colors.red.withValues(alpha: 0.12);
+    } else if (selected) {
+      border = scheme.primary;
+      bg = scheme.primary.withValues(alpha: 0.08);
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          decoration: BoxDecoration(
+            color: bg,
+            border: Border.all(color: border),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            text,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              color: matched ? scheme.onSurfaceVariant.withValues(alpha: 0.5) : null,
+            ),
           ),
         ),
       ),

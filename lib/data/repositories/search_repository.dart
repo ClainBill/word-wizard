@@ -32,6 +32,12 @@ class SearchRepository {
   }) =>
       _db.randomGlosses(excludeEntryId: excludeEntryId, excludeGloss: excludeGloss, count: count);
 
+  /// A common real word ending in the same letters as [headword], for the
+  /// study session's phonological "sounds like" recall cue. Null if nothing
+  /// common enough shares a suffix.
+  Future<String?> similarSoundingWord(int excludeEntryId, String headword) =>
+      _db.similarSoundingWord(headword, excludeEntryId: excludeEntryId);
+
   /// Alternate clue phrasings per entry (other senses, fill-in-the-blank
   /// example sentences) so the crossword doesn't always show the same
   /// first-sense definition.

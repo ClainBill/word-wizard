@@ -254,6 +254,55 @@ class DictionaryDatabase extends _$DictionaryDatabase {
         .toList();
   }
 
+  /// A best-effort "sounds like" cue for the study session's rhyme/sound
+  /// recall game — another common headword ending in the same 2-3 letters
+  /// as [headword], used as a purely phonological hint (nothing about
+  /// meaning). Spelling-suffix match is a proxy for a real phonetic rhyme —
+  /// there's no pronunciation-similarity data in this database — but it's
+  /// right often enough (e.g. -tion, -ight, -ould) to be worth the shortcut.
+  ///
+  /// Tries the shortest, most distinctive suffix first, widening the
+  /// frequency-rank net (common words only, then less common) rather than
+  /// scanning all 740k+ entries — a leading-wildcard `LIKE` can't use the
+  /// headword index, so this always filters by `frequency_rank` first
+  /// (indexed) and only `LIKE`-scans the handful of rows within that band.
+  /// Returns null rather than falling back to a full scan if nothing common
+  /// enough turns up.
+  Future<String?> similarSoundingWord(String headword, {required int excludeEntryId}) async {
+    final lower = headword.toLowerCase();
+    if (lower.length < 3) return null;
+    final suffixes = [
+      if (lower.length >= 3) lower.substring(lower.length - 3),
+      lower.substring(lower.length - 2),
+    ];
+
+    for (final maxRank in const [5000, 30000, 150000]) {
+      for (final suffix in suffixes) {
+        final rows = await customSelect(
+          '''
+          SELECT headword FROM entries
+          WHERE frequency_rank <= ? AND id != ? AND headword LIKE ? AND headword != ?
+            AND headword NOT GLOB '*[^a-z]*'
+          ORDER BY frequency_rank
+          LIMIT 8
+          ''',
+          variables: [
+            Variable.withInt(maxRank),
+            Variable.withInt(excludeEntryId),
+            Variable.withString('%$suffix'),
+            Variable.withString(lower),
+          ],
+        ).get();
+        final candidates = rows.map((r) => r.read<String>('headword')).toSet().toList();
+        if (candidates.isNotEmpty) {
+          candidates.shuffle(Random());
+          return candidates.first;
+        }
+      }
+    }
+    return null;
+  }
+
   /// Grabs a handful of unrelated, plausibly-sized glosses to use as wrong
   /// answers in the study session's "which definition is right?" mini
   /// exercise — never [excludeGloss] itself, and length-capped so a
