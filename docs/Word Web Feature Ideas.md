@@ -1,0 +1,60 @@
+# Bugs
+ - [ ] In the crossword screen the text in the top left says the size and then crossword, but it just get's cut off after the size so have it just display "Mini", "Midi", or "Mega"
+ - [x] If you start filling out a crossword and hit back the edits are gone until you close and reopen the app.
+   - **Fixed:** `crosswordSessionProvider` (lib/app/providers.dart) was a plain `FutureProvider.family`, so once a puzzle loaded, Riverpod cached that session object forever — including its stale `progress` snapshot from before you started typing. Progress was actually being saved to the database on every keystroke, but going back and reopening the same puzzle just re-served the old cached object instead of re-reading it. Made the provider `autoDispose` so it's dropped when the screen stops watching it, forcing a fresh read from the database (with the saved progress) next time it's opened. Verified in the emulator: filled in letters, backed out, reopened — letters persisted.
+ - [x] After opening another puzzle from history the back arrow will just spit you back to the history screen which means you can fall down the rabbit hole of opening a puzzle, looking at its history, opening another puzzle, and so on which will lead to having to hit back arrow a dozen times to get back to the main menu
+   - **Fixed:** opening a puzzle from history (lib/features/games/crossword_history_screen.dart) used `context.push`, stacking a new crossword screen on top of the history screen every time, which sat on top of whatever crossword screen was already there — two pushes per hop with no cap. Changed it to pop the history screen and then replace the crossword screen underneath it, so the stack stays exactly one crossword screen deep no matter how many times you hop between a puzzle and its history. Verified in the emulator through two history hops: one back press now returns straight to the Games list.
+ - [x] Notifications don't work
+   - **Fixed:** the app's AndroidManifest.xml declared the boot receiver (`ScheduledNotificationBootReceiver`) but not the actual firing receiver (`ScheduledNotificationReceiver`) that flutter_local_notifications needs registered to deliver a scheduled notification when its alarm goes off. Without it, AlarmManager still fired the alarm (it even counted as a "wakeup" in dumpsys) but Android had no registered component to hand the broadcast to, so nothing was ever posted — completely silently, no crash, no log. Added the missing `<receiver>` declaration. Also hardened `NotificationService.scheduleDailyReminders` to check `canScheduleExactNotifications()` first and fall back to an inexact schedule when exact-alarm permission isn't granted, since that had been throwing and silently cancelling the whole run. Verified end-to-end in the emulator (temporarily shortened the fire time to confirm delivery, then reverted): the daily-word notification now actually appears in the shade.
+
+In order of priority (Kind of)
+
+- [x] SRS study screen should allow you to open the actual full card for each word when reviewed so you can read the full context. If swiped up or the word is tapped again? have the full vocab card (that would appear when you click the word from search) pop up from below until you swipe it away. 
+
+- [x] the crosswords use a lot of archaic or weird words and a lot of initialisms. They should focus on actually used words. Also . NO MORE INITIALISMS. Maybe remove rule of symmetry as NYT doesn't even follow it?
+- [x] display a counter of how many of the words are from SRS iin the crossword game in teh corner
+  - **Done:** a small chip in the crossword app bar shows the count of today's words pulled from your study pool, with a tooltip. The puzzle model now tags each placed word as study-pool-sourced or not (persisted, backward-compatible with already-saved puzzles).
+- [x] Improve search. Should be able to add a space to cut off the word so I can find that exact word (etc muse (SPACE) stops showing results for museum etc.)
+  - **Already implemented** — was found already built when auditing the codebase; just wasn't checked off here. A trailing space switches the last token from a prefix match to an exact-token FTS match.
+- [ ] You can group lists into folders which have all the features of a list but they can have other lists nested in it too as well as words (so you can study/pause an entire folder etc.)
+- [ ] Full documentation accessible in the app of all features!
+
+- [x] the crossword should save it's state when quit to resume later 
+  - **Already implemented** — was found already built when auditing the codebase; just wasn't checked off here. Every keystroke persists `progress` against that day's puzzle row, reloaded on next open.
+- [ ] options for how SRS review works including an option to have it quiz from meaning instead of word (both ways or one or the other)
+- [ ] Maybe have an SRS option be when you flip a word over, before it shows the answer it displays a game to help jog your memory if you didn't know it (like a fill in the blank example sentence, or research some other good ideas). Remembering the word after the game doesn't affect the answer to the SRS but it does help user retention. After the game/test the normal backside is shown.
+- [x] have the crossword text input skip squares that already have text in them
+  - **Done:** typing through a word now skips past cells another (crossing) word already filled and lands on the next empty one, jumping to the next word once nothing's left empty.
+- [~] In the SRS study when a card is flipped there should be some small exercises to get my brain associating that word. These could be connecting the word to the correct example sentence, synonym, or definition, or a spelling check, or a completely different style exercise with the goal of checking word comprehension. The games shouldn't take you out of the flow of the study and take seconds to allow me to actively exercise comprehension of the word. Have the game be randomly selected and take up 10-15% of the screen under the rest of the card. You can click a tiny button to play a different game with the word if desired.
+  - **Implemented so far:** a small tinted box now appears under the flipped card with a shuffle button to re-roll it. Two exercise types are live, picked at random: "Which definition is right?" (multiple choice against 2 distractor glosses pulled from unrelated dictionary entries) and "Spell it" (scrambled-letter reconstruction of the headword). Still open from the original idea: synonym-matching and example-sentence-matching exercise types.
+  - Fixed two bugs surfaced while building this: the definition-match query was doing `ORDER BY RANDOM()` over the full 700k-row senses table (multi-second stall) — rewritten to a single indexed batch lookup; and the options row was invisible in some layouts due to a Flutter `CrossAxisAlignment.stretch` + unbounded-height interaction (no error, just blank) — fixed with `IntrinsicHeight`.
+- [x] make sure if you look up a new word when looking at the full card during srs by clicking on a word in the description/example sentence you can add it to a list without leaving srs. 
+  - **Done:** every word in a gloss, example sentence, or etymology line is now individually tappable (dotted underline) — tapping one looks it up and pops its own card up as a stacked sheet, with its own "Add to list" / "Study" buttons, on top of whatever's already open. Works both from the study session's revealed card and from the full word-detail sheet, so you never leave SRS. Falls back through inflected-form resolution (e.g. tapping "ran" finds "run"); shows a snackbar if the word isn't in the dictionary at all.
+- [x] should be able to remove a word from srs without leaving it (elipses)
+  - **Done:** a ⋮ menu on the study session's card header offers "Remove from study" with a confirmation dialog, then advances to the next card without leaving the session.
+
+- [x] Add a game tab with different games to play with SRS or words in specific lists. Intelligent Crosswords/Strands daily feature that exclusively uses words in today's/recent SRS or a specified list.  (CURRENTLY UNDER DEV IS THE CROSSWORDS GAME)
+
+- [x] click any word in a card to pull up that word's card. especially useful in example sentences and word origin.
+  - **Done** — same tappable-word implementation as the SRS "add to list without leaving" item above; covers glosses, examples, and etymology throughout the entry card.
+- [ ] British, American, and archaic/alternative spelling for the same word are consolidated into one word card (same result in search)
+
+- [ ] Implement the text clipboard analyser tab, with history
+
+- [ ] Rehaul the look and feel of the app and logo, I like the anthropic look of grainy paper. As a dictionary app it should feel very grainy and papery, grounded and analogue.
+
+- [ ] Colour theme customisation in settings.
+- [ ] Might be cool to have a question feature in srs review back side of card to ask a question about that word. for example if you want to clarify a use case or, I wanted to know if a 'muse' has to be a person or can be an object too.
+
+OTHER IDEA. what if I have an app that lets me create flashcards from google. I want to remember the things I look up, so what about an app that lets me turn google searches into a flashcard in an srs so every day i get a refresher on the things I at least at one point wanted to learn.
+
+For example the Capitol something national park, and a quote I like from Isaac Newton "If I have seen a little further, it is by standing on the shoulders of giants." these are things I like to know what they are, context and remember them.
+
+It should intelligently put things on the card depending on what the search was and also allow for customisation. For example if it was a location a map showing the surrounding area, or can show a graphic of whatever it is.
+
+I noticed that the 5x5 never has any black squares, why is that? Adding even just two would make for more interesting puzzles.
+  Let's not worry about time constraints just yet (unless they are outrageous) although the end goal is to have them generated
+  when the user clicks "play". We need to figure out a way of consistently generating varied, useful, and interesting puzzles.
+  Can you think of a different approach entirely that may be better? The current algorithm still struggles to stay away from
+  bizzare words (especially in 9x9), and it takes a very long time so maybe we're approaching this
+  wrong?

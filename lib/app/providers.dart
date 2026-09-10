@@ -84,7 +84,8 @@ final crosswordRepositoryProvider = Provider<CrosswordRepository>(
 /// never generated on demand.
 typedef CrosswordSessionKey = ({CrosswordDifficulty difficulty, int? puzzleId});
 
-final crosswordSessionProvider = FutureProvider.family<CrosswordSession?, CrosswordSessionKey>((ref, key) {
+final crosswordSessionProvider =
+    FutureProvider.autoDispose.family<CrosswordSession?, CrosswordSessionKey>((ref, key) {
   final repo = ref.watch(crosswordRepositoryProvider);
   final id = key.puzzleId;
   return id == null ? repo.loadOrGenerate(key.difficulty) : repo.loadPuzzle(id);

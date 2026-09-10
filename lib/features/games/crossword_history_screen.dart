@@ -199,8 +199,17 @@ class _HistoryRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    void open() =>
-        context.push('/games/crossword/${difficulty.storageKey}?puzzle=${entry.id}');
+    // Opening a puzzle from history must not just push another crossword
+    // screen on top of this one: crossword -> history -> crossword ->
+    // history -> ... would keep growing, and back would need one press per
+    // hop to escape. Popping this history screen first and then replacing
+    // the crossword screen it sat on top of keeps the stack exactly one
+    // crossword screen deep no matter how many puzzles get opened this way.
+    void open() {
+      final router = GoRouter.of(context);
+      router.pop();
+      router.pushReplacement('/games/crossword/${difficulty.storageKey}?puzzle=${entry.id}');
+    }
 
     // A day can hold several generations, so the title has to say which one:
     // "Today" three times over would be exactly the confusion this list

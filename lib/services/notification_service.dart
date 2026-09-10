@@ -70,6 +70,20 @@ class NotificationService {
     await _ensureInitialized();
     await _plugin.cancelAll();
 
+    // requestPermissions() only *offers* the Android 12+ "Alarms &
+    // reminders" special permission — the user can back out of that
+    // settings screen without granting it. Scheduling with
+    // exactAllowWhileIdle when it isn't granted throws for every call and
+    // was silently cancelling every reminder for the whole run (nothing
+    // scheduled, no error visible anywhere). Falling back to an inexact
+    // schedule means reminders still show up, just not at the exact minute.
+    final android =
+        _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    final canScheduleExact = await android?.canScheduleExactNotifications() ?? false;
+    final scheduleMode = canScheduleExact
+        ? AndroidScheduleMode.exactAllowWhileIdle
+        : AndroidScheduleMode.inexactAllowWhileIdle;
+
     final rand = Random();
     final now = tz.TZDateTime.now(tz.local);
     var id = 0;
@@ -94,7 +108,7 @@ class NotificationService {
               styleInformation: BigTextStyleInformation(word.notificationBody),
             ),
           ),
-          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+          androidScheduleMode: scheduleMode,
           uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
         );
       }

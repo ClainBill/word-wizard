@@ -35,6 +35,13 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- The receiver that actually fires a scheduled notification when
+             its alarm goes off. Without this declared, AlarmManager still
+             "delivers" the broadcast (it counts as a wakeup) but Android has
+             no registered component to hand it to, so notifications never
+             appear — silently, with no error anywhere. -->
+        <receiver android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
         <!-- Lets flutter_local_notifications re-arm exact alarms after a
              reboot; the app itself also re-schedules on every launch, so
              this only matters if the device restarts while unopened. -->
