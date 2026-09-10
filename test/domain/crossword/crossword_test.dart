@@ -5,11 +5,14 @@ import 'dart:math';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:word_wizard/domain/crossword/clues.dart';
 import 'package:word_wizard/domain/crossword/crossword_models.dart';
+import 'package:word_wizard/domain/crossword/editorial.dart';
 import 'package:word_wizard/domain/crossword/generator.dart';
+import 'package:word_wizard/domain/crossword/history.dart';
 import 'package:word_wizard/domain/crossword/skeleton.dart';
 import 'package:word_wizard/domain/crossword/solver.dart';
 import 'package:word_wizard/domain/crossword/themes.dart';
 import 'package:word_wizard/domain/crossword/word_list.dart';
+import 'package:word_wizard/services/crossword_review_service.dart';
 
 /// PORTING_SPEC.md §11 lists seven invariants worth asserting; all seven are
 /// covered here, plus unit tests for the pieces that have a right answer
@@ -183,6 +186,7 @@ void main() {
         index: index,
         rng: Random(1),
         preAssigned: const {},
+        blockedAnswers: const {},
         timeBudget: const Duration(seconds: 20),
       );
       final fill = solver.solve();
@@ -202,7 +206,7 @@ void main() {
       expect(byId.length, slots.length);
     });
 
-    test('recent answers never reappear in the fill (§A.2 requirement 10)', () {
+    test('blocked answers never reappear in the fill (§6.2, §A.2 req. 10)', () {
       final black = _parseGrid(_reference9x9);
       final slots = extractSlots(black, 9);
       final index = CrosswordPatternIndex.build(_entries.where(inFillPool));
@@ -213,6 +217,7 @@ void main() {
         index: index,
         rng: Random(2),
         preAssigned: const {},
+        blockedAnswers: const {},
         timeBudget: const Duration(seconds: 20),
       ).solve()!;
 
@@ -222,7 +227,7 @@ void main() {
         index: index,
         rng: Random(3),
         preAssigned: const {},
-        recentUsage: banned,
+        blockedAnswers: banned,
         timeBudget: const Duration(seconds: 20),
       ).solve();
 
@@ -333,15 +338,30 @@ void main() {
       for (final entry in _entries.take(500)) {
         expect(entry.text, matches(RegExp(r'^[A-Z]+$')));
         expect(entry.length, inInclusiveRange(3, 17));
-        expect(entry.entryId, greaterThan(0));
         expect(entry.freqZipf, greaterThanOrEqualTo(0));
+        expect(entry.familiarity, inInclusiveRange(1, 5));
+        expect(entry.display, isNotEmpty);
       }
+      // §2: 100% of the asset carries at least one clue, 64% carry two.
+      expect(_entries.every((e) => e.clues.isNotEmpty), isTrue);
+      final withTwo = _entries.where((e) => e.clues.length >= 2).length;
+      expect(withTwo / _entries.length, greaterThan(0.5));
     });
 
-    test('the fill pool clears the short-length floors', () {
+    test('every one of the fill pool\'s four bars is enforced (§6.3)', () {
       for (final entry in _entries.where(inFillPool)) {
-        expect(entry.freqZipf,
-            greaterThanOrEqualTo(fillMinZipfByLength[entry.length] ?? fillMinZipf));
+        expect(entry.freqZipf, greaterThanOrEqualTo(fillMinZipf));
+        expect(entry.clues, isNotEmpty);
+        expect(entry.editorTier, isNot(lastResortTier));
+        expect(entry.familiarity, greaterThanOrEqualTo(familiarityFloor(entry.length)));
+        expect(entry.isCrosswordese, isFalse);
+      }
+      // The bars are what keep the words readers rejected by name out of the
+      // pool, and every one of them clears at least one of the others.
+      for (final junk in ['ERG', 'PAP', 'ABA', 'DES', 'AIN', 'NEE']) {
+        final entry = _entries.where((e) => e.text == junk).firstOrNull;
+        if (entry == null) continue;
+        expect(inFillPool(entry), isFalse, reason: '$junk should not be fill');
       }
     });
   });
@@ -378,6 +398,10 @@ void main() {
       // and clue lookup skips it.
       expect(puzzle.words.single.entryId, -1);
       expect(puzzle.words.single.fromStudyPool, isFalse);
+      // Likewise for the fields the Crosswordler engine added: a puzzle with
+      // no slot ids simply cannot be reviewed, which the repository checks.
+      expect(puzzle.words.single.slotId, -1);
+      expect(puzzle.words.single.display, 'PEDDLER');
     });
 
     test('a round trip through toJson preserves every field', () {
@@ -387,18 +411,24 @@ void main() {
         words: [
           CrosswordWordPlacement(
             number: 1,
+            slotId: 3,
             direction: CrosswordDirection.down,
             row: 0,
             col: 0,
             answer: 'MUSE',
+            display: 'muse',
             entryId: 10206,
-            clue: 'A source of inspiration.',
+            clue: 'A source of inspiration',
+            clueType: CrosswordClueType.synonym,
+            freqZipf: 4.1,
             fromStudyPool: true,
           ),
         ],
         themeName: 'animals',
         themeKind: 'hidden_word',
         qualityScore: 13.5,
+        anchors: ['MUSE'],
+        seed: 77,
       );
 
       final restored = CrosswordPuzzle.fromJson(original.toJson());
@@ -406,11 +436,17 @@ void main() {
       expect(restored.themeName, 'animals');
       expect(restored.themeKind, 'hidden_word');
       expect(restored.qualityScore, 13.5);
+      expect(restored.anchors, ['MUSE']);
+      expect(restored.seed, 77);
       final word = restored.words.single;
       expect(word.entryId, 10206);
+      expect(word.slotId, 3);
+      expect(word.display, 'muse');
+      expect(word.clueType, CrosswordClueType.synonym);
+      expect(word.freqZipf, 4.1);
       expect(word.fromStudyPool, isTrue);
       expect(word.direction, CrosswordDirection.down);
-      expect(word.clue, 'A source of inspiration.');
+      expect(word.clue, 'A source of inspiration');
     });
   });
 
@@ -424,8 +460,10 @@ void main() {
       final request = CrosswordIsolateRequest(
         wordListSource: source,
         difficulty: CrosswordDifficulty.mini,
-        srsWords: const [('SPARE', 'spare', 12345)],
-        recentUsage: const {'OTHER'},
+        srsWords: const [
+          (text: 'SPARE', display: 'spare', entryId: 12345, clue: 'Not in use'),
+        ],
+        blockedAnswers: const {'OTHER'},
         weekday: DateTime.wednesday,
         seed: 4242,
       );
@@ -436,12 +474,49 @@ void main() {
       expect(puzzle!.words, isNotEmpty);
       expect(puzzle.words.map((w) => w.answer), contains('SPARE'));
       expect(puzzle.words.map((w) => w.answer), isNot(contains('OTHER')));
-      // Every placed word resolves to a dictionary row so a clue can be
-      // fetched for it, except a synthesized SRS anchor, which carries the
-      // entry id the caller supplied.
+      // Clues are baked into the asset, so every word arrives clued (§6.3
+      // makes an unclued word unselectable), and the study anchor carries the
+      // dictionary row it came from so a solve can be credited back to it.
       for (final word in puzzle.words) {
-        expect(word.entryId, greaterThan(0));
+        expect(word.clue, isNotEmpty);
       }
+      final anchor = puzzle.words.firstWhere((w) => w.answer == 'SPARE');
+      expect(anchor.entryId, 12345);
+      expect(anchor.fromStudyPool, isTrue);
+    });
+
+    // A verdict's word edits re-solve the grid, which needs the index, so the
+    // revision crosses the same boundary as generation — with a puzzle and a
+    // verdict in the request this time.
+    test('a revision survives Isolate.run', () async {
+      final source = File('assets/crossword/wordlist.tsv').readAsStringSync();
+      final puzzle = generateCrossword(CrosswordGenerationRequest(
+        difficulty: CrosswordDifficulty.mini,
+        entries: _entries,
+        srsAnchors: const [],
+        blockedAnswers: const {},
+        weekday: DateTime.friday,
+        seed: 5150,
+      ))!;
+      final target = puzzle.words.first;
+
+      final request = CrosswordRevisionRequest(
+        wordListSource: source,
+        puzzle: puzzle,
+        verdict: EditorialVerdict(
+          clueEdits: {target.slotId: 'A replacement clue that breaks no rules'},
+        ),
+        blockedAnswers: const {},
+        seed: puzzle.seed,
+      );
+      final revision = await Isolate.run(() => reviseCrosswordFromSource(request));
+
+      expect(revision.cluesApplied, 1);
+      expect(
+        revision.puzzle.words.firstWhere((w) => w.slotId == target.slotId).clue,
+        'A replacement clue that breaks no rules',
+      );
+      expect(revision.puzzle.reviewed, isTrue);
     });
   });
 
@@ -455,12 +530,13 @@ void main() {
             text: 'SPARE',
             display: 'spare',
             entryId: 12345,
+            clue: 'Not in use',
           );
           final puzzle = generateCrossword(CrosswordGenerationRequest(
             difficulty: difficulty,
             entries: _entries,
             srsAnchors: [srs],
-            recentUsage: const {},
+            blockedAnswers: const {},
             weekday: (seed % 7) + 1,
             seed: 900 + seed,
           ));
@@ -519,4 +595,449 @@ void main() {
       });
     }
   });
+
+  group('bitset domains (§5.2)', () {
+    final index = CrosswordPatternIndex.build(_entries.where(inFillPool));
+
+    test('maskFor agrees with the candidate set it replaces', () {
+      for (final pattern in ['C.T', 'S..RE', '....', 'B.T.', 'ZZ.ZZ']) {
+        final fromMask = index.entriesIn(pattern.length, index.maskFor(pattern));
+        final expected = [
+          for (final entry in _entries)
+            if (inFillPool(entry) &&
+                entry.length == pattern.length &&
+                _matches(entry.text, pattern))
+              entry.text,
+        ];
+        expect(fromMask.map((e) => e.text).toSet(), expected.toSet(),
+            reason: 'pattern $pattern');
+      }
+    });
+
+    test('set bits come out in score order, best first', () {
+      final entries = index.entriesIn(5, index.maskFor('.....'));
+      expect(entries, isNotEmpty);
+      for (var i = 1; i < entries.length; i++) {
+        expect(entries[i - 1].score, greaterThanOrEqualTo(entries[i].score));
+      }
+    });
+
+    test('a domain reports its own size', () {
+      final mask = index.maskFor('C.T');
+      expect(maskPopCount(mask), index.entriesIn(3, mask).length);
+      expect(maskIsEmpty(index.maskFor('QQQ')), isTrue);
+    });
+
+    test("the solver reaches §11's node counts, not thousands", () {
+      // A port with a bug in propagation or undo still solves — slowly, and
+      // by brute force. Node count is what tells the two apart, because it is
+      // a property of the search rather than of the machine: §11 measures
+      // 11 / 32 / 115 nodes for the three sizes, and says a port taking
+      // thousands has a bug however fast it runs.
+      final black = _parseGrid(_reference9x9);
+      final slots = extractSlots(black, 9);
+      final solver = CrosswordSolver(
+        slots: slots,
+        index: index,
+        rng: Random(7),
+        preAssigned: const {},
+        blockedAnswers: const {},
+        timeBudget: const Duration(seconds: 20),
+      );
+      expect(solver.solve(), isNotNull);
+      expect(solver.steps, lessThan(400),
+          reason: 'the reference 9x9 solves in ~32 nodes; ${solver.steps} '
+              'means propagation or undo is wrong');
+    });
+  });
+
+  group('clue selection (§8)', () {
+    test('weighting favours crossword register over an encyclopedic gloss', () {
+      const terse = CrosswordClue('A pair', CrosswordClueType.curated);
+      const gloss = CrosswordClue(
+        'The cardinal number that is the sum of one and one and one more',
+        CrosswordClueType.definition,
+      );
+      expect(clueOptionWeight(terse), greaterThan(clueOptionWeight(gloss)));
+      // Every option keeps a real chance, so variety survives.
+      expect(clueOptionWeight(gloss), greaterThan(0));
+    });
+
+    test('a seed reproduces the same clue', () {
+      final entry = _entries.firstWhere((e) => e.clues.length >= 2);
+      final first = pickClue(entry, Random(11)).text;
+      expect(pickClue(entry, Random(11)).text, first);
+    });
+
+    test('a clue that leaks its answer is replaced, never shown', () {
+      const leaky = CrosswordEntry(
+        text: 'LASER',
+        display: 'laser',
+        freqZipf: 4.0,
+        synsetCount: 1,
+        isProper: false,
+        isPhrase: false,
+        isCrosswordese: false,
+        tags: [],
+        score: 8,
+        editorTier: 51,
+        familiarity: 5,
+        clues: [
+          CrosswordClue(
+            'Light amplification by stimulated emission of radiation',
+            CrosswordClueType.definition,
+          ),
+        ],
+      );
+      expect(pickClue(leaky, Random(1)).text, isNot(contains('amplification')));
+    });
+
+    test('the gate catches what a model actually got wrong', () {
+      // Each of these is a rule the reviewer was given explicitly and broke
+      // anyway in a measured run.
+      expect(validateClue('A landslide victory', 'LANDSLIDE').ok, isFalse);
+      expect(validateClue('Ophthalmologist, for short', 'DOC').ok, isFalse);
+      expect(validateClue("Three-letter boy's name", 'ERIC').ok, isFalse);
+      expect(validateClue('Bank', 'RELY').ok, isFalse); // one word is not a clue
+      expect(
+        validateClue('Frozen dessert containing cream and sugar', 'ICECREAM',
+                display: 'ice cream')
+            .ok,
+        isFalse,
+      );
+      expect(validateClue('Exit or way out', 'EGRESS').ok, isTrue);
+    });
+  });
+
+  group('solve history (§6.2a)', () {
+    test('an abandoned puzzle suppresses nothing, a revealed answer returns', () {
+      final events = [
+        CrosswordSolveEvent.fromAnswers(
+          puzzleId: 'a',
+          solved: const ['SPARE', "I do's"],
+          revealed: const ['SPARE'],
+        ),
+        CrosswordSolveEvent.fromAnswers(puzzleId: 'b', solved: const ['TERSE']),
+      ];
+      final blocked = blockedAnswersFrom(events);
+
+      // Solved but revealed: they still need to learn it, so it comes back.
+      expect(blocked, isNot(contains('SPARE')));
+      // Normalized to grid form, so "I do's" and IDOS are one answer.
+      expect(blocked, contains('IDOS'));
+      expect(blocked, contains('TERSE'));
+    });
+
+    test('only the last ten events count', () {
+      // Answers are letters only — normalization strips anything else — so
+      // number the events with letters too.
+      final names = [for (var i = 0; i < 12; i++) 'WORD${String.fromCharCode(65 + i)}'];
+      final events = [
+        for (var i = 0; i < names.length; i++)
+          CrosswordSolveEvent.fromAnswers(puzzleId: '$i', solved: [names[i]]),
+      ];
+      final blocked = blockedAnswersFrom(events);
+      expect(blocked, isNot(contains(names[0])));
+      expect(blocked, isNot(contains(names[1])));
+      expect(blocked, contains(names.last));
+      expect(blocked.length, solveHistoryWindow);
+    });
+  });
+
+  group('the editorial pass (§9.3, §9.4)', () {
+    final index = CrosswordPatternIndex.build(_entries.where(inFillPool));
+
+    CrosswordPuzzle buildPuzzle() => generateCrossword(CrosswordGenerationRequest(
+          difficulty: CrosswordDifficulty.midi,
+          entries: _entries,
+          srsAnchors: [
+            CrosswordEntry.synthetic(
+              text: 'SPARE',
+              display: 'spare',
+              entryId: 1,
+              clue: 'Not in use',
+            ),
+          ],
+          blockedAnswers: const {},
+          weekday: DateTime.thursday,
+          seed: 31337,
+        ))!;
+
+    test('a verdict survives the shapes models actually return', () {
+      final verdict = parseVerdict('Sure, here you go:\n'
+          '```json\n'
+          '{"entertainment": 7.5, "notes": "Solid.",\n'
+          ' "clue_edits": {"12A": "Exit or way out", "3": "  ", "x": "ignored"},\n'
+          ' "word_edits": {}}\n'
+          '```');
+      expect(verdict.entertainment, 7.5);
+      // Models key edits as "12", 12 or "12A" however they are asked.
+      expect(verdict.clueEdits, {12: 'Exit or way out'});
+      expect(verdict.bannedAnswers, isEmpty);
+      // Anything unreadable is an empty verdict, which is a no-op.
+      expect(parseVerdict('sorry, I cannot help with that').isEmpty, isTrue);
+      expect(parseVerdict('').isEmpty, isTrue);
+    });
+
+    test('the reviewer is shown the answers, keyed by slot id', () {
+      final puzzle = buildPuzzle();
+      final rendered = renderForReview(puzzle, weekday: DateTime.thursday);
+      expect(rendered, contains('Day: Thursday'));
+      expect(rendered, contains('Required answers (do not replace): SPARE'));
+      expect(rendered, contains('id=${puzzle.words.first.slotId}'));
+      expect(rendered, contains('#')); // the grid, black squares and all
+    });
+
+    test('an edit that breaks a rule is rejected, a good one applied', () {
+      final puzzle = buildPuzzle();
+      final target = puzzle.words.firstWhere((w) => w.answer != 'SPARE');
+      final other = puzzle.words.lastWhere((w) => w.answer != target.answer);
+
+      final revision = revisePuzzle(
+        puzzle: puzzle,
+        verdict: EditorialVerdict(clueEdits: {
+          target.slotId: 'A perfectly ordinary replacement clue',
+          other.slotId: 'Clue containing ${other.answer} itself',
+        }),
+        index: index,
+        blockedAnswers: const {},
+        seed: 1,
+      );
+
+      expect(revision.cluesApplied, 1);
+      expect(revision.cluesRejected[ClueRejection.containsAnswer], 1);
+      expect(
+        revision.puzzle.words.firstWhere((w) => w.slotId == target.slotId).clue,
+        'A perfectly ordinary replacement clue',
+      );
+      expect(assertPuzzleValid(revision.puzzle), isEmpty);
+    });
+
+    test('a banned answer is refilled by the solver, not by the reviewer', () {
+      final puzzle = buildPuzzle();
+      final target = puzzle.words.firstWhere((w) => w.answer != 'SPARE');
+
+      final revision = revisePuzzle(
+        puzzle: puzzle,
+        verdict: EditorialVerdict(bannedAnswers: {target.slotId: 'nobody knows this'}),
+        index: index,
+        blockedAnswers: const {},
+        seed: 1,
+      );
+
+      expect(revision.wordsApplied, 1, reason: revision.wordsRejectedReason);
+      final answers = revision.puzzle.words.map((w) => w.answer);
+      expect(answers, isNot(contains(target.answer)));
+      // The replacement is the solver's, and it has to be a real word from
+      // the fill pool that satisfies every crossing.
+      final replacement =
+          revision.puzzle.words.firstWhere((w) => w.slotId == target.slotId).answer;
+      expect(index.byText[replacement], isNotNull);
+      expect(assertPuzzleValid(revision.puzzle), isEmpty);
+      // Recorded as "this became that", which is what the debug log shows.
+      final edit = revision.edits.single;
+      expect(edit.isWordEdit, isTrue);
+      expect(edit.before, target.answer);
+      expect(edit.after, replacement);
+    });
+
+    test('the puzzle only churns where it had to', () {
+      // Banning one answer re-fills the grid, but the point of doing it with
+      // the same seed and low jitter is that everything not forced to move
+      // stays put — which is what lets clue rewrites for untouched answers
+      // survive alongside a ban.
+      final puzzle = buildPuzzle();
+      final target = puzzle.words.firstWhere((w) => w.answer != 'SPARE');
+
+      final revision = revisePuzzle(
+        puzzle: puzzle,
+        verdict: EditorialVerdict(bannedAnswers: {target.slotId: 'unfair'}),
+        index: index,
+        blockedAnswers: const {},
+        seed: 1,
+      );
+      expect(revision.wordsApplied, 1);
+
+      final before = {for (final w in puzzle.words) w.slotId: w.answer};
+      final unchanged = revision.puzzle.words
+          .where((w) => before[w.slotId] == w.answer)
+          .length;
+      expect(unchanged, greaterThan(puzzle.words.length ~/ 2),
+          reason: 'a ban should not rewrite the whole puzzle');
+    });
+
+    test('an anchor can never be banned', () {
+      final puzzle = buildPuzzle();
+      final anchor = puzzle.words.firstWhere((w) => w.answer == 'SPARE');
+
+      final revision = revisePuzzle(
+        puzzle: puzzle,
+        verdict: EditorialVerdict(bannedAnswers: {anchor.slotId: 'I dislike it'}),
+        index: index,
+        blockedAnswers: const {},
+        seed: 1,
+      );
+
+      // The study word is the reason the puzzle is personalised; nothing the
+      // reviewer says removes it.
+      expect(revision.puzzle.words.map((w) => w.answer), contains('SPARE'));
+      expect(revision.wordsApplied, 0);
+      expect(revision.wordsRejectedReason, 'nothing_bannable');
+    });
+
+    test('a clue rewrite survives a ban unless its own answer moved', () {
+      final puzzle = buildPuzzle();
+      final banned = puzzle.words.firstWhere((w) => w.answer != 'SPARE');
+      // A slot far from the banned one, so it is unlikely to be re-filled.
+      final other = puzzle.words.lastWhere(
+        (w) => w.answer != 'SPARE' && w.slotId != banned.slotId,
+      );
+
+      final revision = revisePuzzle(
+        puzzle: puzzle,
+        verdict: EditorialVerdict(
+          bannedAnswers: {banned.slotId: 'unfair'},
+          clueEdits: {other.slotId: 'A perfectly ordinary replacement clue'},
+        ),
+        index: index,
+        blockedAnswers: const {},
+        seed: 1,
+      );
+
+      final after = revision.puzzle.words.firstWhere((w) => w.slotId == other.slotId);
+      final clueEdit = revision.edits.firstWhere((e) => !e.isWordEdit);
+      if (after.answer == other.answer) {
+        // Its answer survived, so the rewrite is still about the right word.
+        expect(clueEdit.applied, isTrue);
+        expect(after.clue, 'A perfectly ordinary replacement clue');
+      } else {
+        // Its answer moved, so the rewrite is stale and is dropped — the bug
+        // this guards is a clue for one answer landing on another.
+        expect(clueEdit.applied, isFalse);
+        expect(clueEdit.rejection, 'stale_after_refill');
+      }
+      expect(assertPuzzleValid(revision.puzzle), isEmpty);
+    });
+
+    test('assertPuzzleValid catches a broken revision', () {
+      final puzzle = buildPuzzle();
+      final broken = puzzle.copyWith(words: [
+        for (final word in puzzle.words)
+          word == puzzle.words.first
+              ? word.copyWith(clue: 'A clue containing ${word.answer}')
+              : word,
+      ]);
+      expect(assertPuzzleValid(broken), isNotEmpty);
+    });
+  });
+  group('the AI editor debug log', () {
+    final index = CrosswordPatternIndex.build(_entries.where(inFillPool));
+
+    CrosswordPuzzle buildPuzzle() => generateCrossword(CrosswordGenerationRequest(
+          difficulty: CrosswordDifficulty.midi,
+          entries: _entries,
+          srsAnchors: const [],
+          blockedAnswers: const {},
+          weekday: DateTime.thursday,
+          seed: 4242,
+        ))!;
+
+    test('cost is billed on prompt + completion, never on reasoning twice', () {
+      // Reasoning tokens are already inside completion_tokens, which is how
+      // the API bills them; adding them again would roughly double the
+      // reported cost of a reasoning model.
+      final cost = estimateCostUsd(
+        model: 'gpt-5-mini',
+        promptTokens: 1000000,
+        completionTokens: 1000000,
+      );
+      expect(cost, closeTo(0.25 + 2.00, 1e-9));
+
+      // An unpriced model reports nothing rather than free — the UI shows a
+      // dash, which is honest about not knowing.
+      expect(
+        estimateCostUsd(model: 'some-future-model', promptTokens: 1000, completionTokens: 1000),
+        0,
+      );
+      expect(estimateCostUsd(model: 'gpt-5-mini', promptTokens: 0, completionTokens: 0), 0);
+    });
+
+    test('every proposed edit is recorded, applied or not', () {
+      final puzzle = buildPuzzle();
+      final good = puzzle.words.first;
+      final bad = puzzle.words.last;
+
+      final revision = revisePuzzle(
+        puzzle: puzzle,
+        verdict: EditorialVerdict(clueEdits: {
+          good.slotId: 'An entirely reasonable replacement clue',
+          bad.slotId: 'Clue mentioning ${bad.answer} outright',
+          9999: 'An edit for a slot that does not exist',
+        }),
+        index: index,
+        blockedAnswers: const {},
+        seed: 1,
+      );
+
+      expect(revision.cluesProposed, 3);
+      expect(revision.cluesApplied, 1);
+
+      final applied = revision.edits.firstWhere((e) => e.applied);
+      expect(applied.answer, good.answer);
+      // `before` is what the clue used to say, so the log can show the swap.
+      expect(applied.before, good.clue);
+      expect(applied.after, 'An entirely reasonable replacement clue');
+      expect(applied.rejection, isEmpty);
+
+      final leaked = revision.edits.firstWhere((e) => e.answer == bad.answer);
+      expect(leaked.applied, isFalse);
+      expect(leaked.rejection, ClueRejection.containsAnswer.name);
+
+      // An edit keyed to a slot the puzzle doesn't have is kept too: a
+      // reviewer inventing ids is exactly the sort of thing worth seeing.
+      expect(
+        revision.edits.where((e) => e.rejection == 'unknown_slot').length,
+        1,
+      );
+    });
+
+    test('a ban that cannot be filled records the reason and changes nothing', () {
+      final puzzle = buildPuzzle();
+      // Banning every answer leaves the grid with nothing to fill itself
+      // from, which is the failure this has to survive.
+      final revision = revisePuzzle(
+        puzzle: puzzle,
+        verdict: EditorialVerdict(bannedAnswers: {
+          for (final word in puzzle.words) word.slotId: 'unfair',
+        }),
+        index: index,
+        blockedAnswers: const {},
+        seed: 1,
+      );
+
+      expect(revision.wordsApplied, 0);
+      expect(revision.wordsRejectedReason, isNotEmpty);
+      expect(revision.puzzle.words, puzzle.words);
+      // Every attempted ban is recorded with why it failed, and with no
+      // replacement — the reviewer never proposes one.
+      expect(revision.edits, isNotEmpty);
+      for (final edit in revision.edits) {
+        expect(edit.applied, isFalse);
+        expect(edit.after, isEmpty);
+        expect(edit.rejection, revision.wordsRejectedReason);
+      }
+      // Round-trips through the JSON the log stores.
+      final restored = CrosswordProposedEdit.fromJson(revision.edits.first.toJson());
+      expect(restored.isWordEdit, isTrue);
+      expect(restored.rejection, revision.edits.first.rejection);
+    });
+  });
+}
+
+/// Whether [text] matches a '.'-wildcard pattern.
+bool _matches(String text, String pattern) {
+  for (var i = 0; i < pattern.length; i++) {
+    if (pattern[i] != '.' && pattern[i] != text[i]) return false;
+  }
+  return true;
 }

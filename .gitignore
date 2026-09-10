@@ -64,6 +64,11 @@ assets/db/dictionary.db
 tool/pipeline/raw/
 tool/pipeline/out/dictionary-full.db
 
+# Secrets. The crossword's editorial pass reads OPENAI_API_KEY from here, and
+# .env is bundled as an asset in debug builds, so it must never be committed.
+# `.env.example` is the committed template.
+.env
+
 # Claude Code scratch: worktrees are full checkouts of this repo, and the
 # local settings file is per-machine.
 .claude/worktrees/

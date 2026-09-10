@@ -59,7 +59,11 @@ CrosswordTheme? buildSundayTheme(
     for (final hidden in hiddenCategories[category]!) {
       final matches = [
         for (final entry in entries)
-          if (entry.length >= 6 && entry.text != hidden && entry.text.contains(hidden)) entry,
+          if (entry.length >= 6 &&
+              entry.text != hidden &&
+              entry.clues.isNotEmpty &&
+              entry.text.contains(hidden))
+            entry,
       ]..sort((a, b) => b.score.compareTo(a.score));
       if (matches.isNotEmpty) {
         matchesByWord[hidden] = matches.take(maxPerWord).toList();
@@ -89,7 +93,7 @@ CrosswordTheme selectTheme({
   required int weekday,
   required int maxAnchors,
   required int gridSize,
-  required Set<String> recentUsage,
+  required Set<String> blockedAnswers,
   required Random rng,
 }) {
   final category = themeCategoryFor(weekday);
@@ -102,7 +106,7 @@ CrosswordTheme selectTheme({
         kind: theme.kind,
         anchors: [
           for (final entry in theme.anchors)
-            if (entry.length <= gridSize && !recentUsage.contains(entry.text)) entry,
+            if (entry.length <= gridSize && !blockedAnswers.contains(entry.text)) entry,
         ],
       );
     }
@@ -115,7 +119,13 @@ CrosswordTheme selectTheme({
     for (final entry in entries)
       if (entry.length >= 4 &&
           entry.length <= gridSize &&
-          !recentUsage.contains(entry.text) &&
+          !blockedAnswers.contains(entry.text) &&
+          // §7.2: an anchor is drawn from the whole word list rather than the
+          // fill pool, so unlike ordinary fill it can arrive unclued — and
+          // then falls through to a stub, in the puzzle's most prominent
+          // slot. The SRS word is the deliberate exception (the app resolves
+          // a clue for it from its own dictionary); a theme pick is not.
+          entry.clues.isNotEmpty &&
           (tags == null || entry.tags.any(tags.contains)))
         entry,
   ]..sort((a, b) => b.score.compareTo(a.score));

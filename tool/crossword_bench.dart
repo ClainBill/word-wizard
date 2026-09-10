@@ -48,9 +48,14 @@ void main(List<String> args) {
         // A stand-in study word per run, so the anchor path is exercised the
         // way the app uses it.
         srsAnchors: [
-          CrosswordEntry.synthetic(text: _srsWords[run % _srsWords.length], display: 'x', entryId: 1),
+          CrosswordEntry.synthetic(
+            text: _srsWords[run % _srsWords.length],
+            display: _srsWords[run % _srsWords.length].toLowerCase(),
+            entryId: 1,
+            clue: 'A word from your study list',
+          ),
         ],
-        recentUsage: const {},
+        blockedAnswers: const {},
         weekday: (run % 7) + 1,
         seed: 1000 + run,
       ));

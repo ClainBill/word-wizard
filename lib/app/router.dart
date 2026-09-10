@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 
 import '../domain/crossword/crossword_models.dart';
 import '../features/entry/entry_detail_screen.dart';
+import '../features/games/crossword_banned_answers_screen.dart';
 import '../features/games/crossword_history_screen.dart';
 import '../features/games/crossword_screen.dart';
 import '../features/games/games_screen.dart';
@@ -41,8 +42,16 @@ final appRouter = GoRouter(
       path: '/games/crossword/:difficulty',
       builder: (context, state) => CrosswordScreen(
         difficulty: CrosswordDifficulty.fromStorageKey(state.pathParameters['difficulty']!),
-        date: state.uri.queryParameters['date'],
+        // A specific past generation opened from history; absent means the
+        // current puzzle for today.
+        puzzleId: int.tryParse(state.uri.queryParameters['puzzle'] ?? ''),
       ),
+    ),
+    // Debug: the crossword's ban list. Not under a difficulty — a ban applies
+    // to every size.
+    GoRoute(
+      path: '/games/crossword-bans',
+      builder: (context, state) => const CrosswordBannedAnswersScreen(),
     ),
     GoRoute(
       path: '/games/crossword/:difficulty/history',

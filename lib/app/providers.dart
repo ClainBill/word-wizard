@@ -74,23 +74,49 @@ final crosswordRepositoryProvider = Provider<CrosswordRepository>(
     ref.watch(appDatabasesProvider).user,
     ref.watch(studyRepositoryProvider),
     ref.watch(searchRepositoryProvider),
+    ref.watch(settingsRepositoryProvider),
   ),
 );
 
-/// Which difficulty and which day — `date` is a 'YYYY-MM-DD' string, either
-/// today's (generates on first read if missing) or a past day from history
-/// (never generates; `null` session means no puzzle exists for that day).
-typedef CrosswordSessionKey = ({CrosswordDifficulty difficulty, String date});
+/// Which puzzle to show. A null [puzzleId] means "the current one" — the
+/// newest generated for today, built on first read if today has none. A
+/// non-null id is a specific past generation opened from history, which is
+/// never generated on demand.
+typedef CrosswordSessionKey = ({CrosswordDifficulty difficulty, int? puzzleId});
 
 final crosswordSessionProvider = FutureProvider.family<CrosswordSession?, CrosswordSessionKey>((ref, key) {
   final repo = ref.watch(crosswordRepositoryProvider);
-  return key.date == CrosswordRepository.today()
-      ? repo.loadOrGenerate(key.difficulty)
-      : repo.loadForDate(key.difficulty, key.date);
+  final id = key.puzzleId;
+  return id == null ? repo.loadOrGenerate(key.difficulty) : repo.loadPuzzle(id);
 });
 
+/// **Debug.** The editorial runs against one specific puzzle, so the solving
+/// screen can say whether the AI editor touched this grid.
+final crosswordPuzzleReviewsProvider =
+    FutureProvider.family<List<CrosswordReviewRun>, int>(
+  (ref, puzzleId) => ref.watch(crosswordRepositoryProvider).reviewRunsForPuzzle(puzzleId),
+);
+
 /// Every day a puzzle's been generated for one difficulty, most recent
-/// first — backs the history list.
+/// first, with the editorial runs against it — backs the history list.
 final crosswordHistoryProvider = FutureProvider.family<List<CrosswordHistoryEntry>, CrosswordDifficulty>(
   (ref, difficulty) => ref.watch(crosswordRepositoryProvider).history(difficulty),
+);
+
+/// **Debug.** What the editorial pass has cost so far at one size.
+final crosswordReviewTotalsProvider =
+    FutureProvider.family<CrosswordReviewTotals, CrosswordDifficulty>(
+  (ref, difficulty) => ref.watch(crosswordRepositoryProvider).reviewTotals(difficulty),
+);
+
+/// **Debug.** Answers the editorial pass has rejected as unfair, which are
+/// kept out of every future puzzle until unbanned.
+final crosswordBannedAnswersProvider = FutureProvider<List<CrosswordBannedAnswer>>(
+  (ref) => ref.watch(crosswordRepositoryProvider).bannedAnswers(),
+);
+
+/// **Debug.** Whether the editorial pass may spend money. See
+/// `SettingsRepository.crosswordReviewKey`.
+final crosswordReviewEnabledProvider = StreamProvider<bool>(
+  (ref) => ref.watch(settingsRepositoryProvider).watchCrosswordReviewEnabled(),
 );

@@ -3,23 +3,115 @@ import 'dart:isolate';
 import 'dart:math';
 
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../domain/crossword/clues.dart';
 import '../../domain/crossword/crossword_models.dart';
+import '../../domain/crossword/editorial.dart';
 import '../../domain/crossword/generator.dart';
+import '../../domain/crossword/history.dart';
+import '../../domain/srs/sm2.dart';
+import '../../services/crossword_review_service.dart';
 import '../user/user_database.dart';
 import 'search_repository.dart';
+import 'settings_repository.dart';
 import 'study_repository.dart';
 
-/// A loaded puzzle plus whatever progress the user's already saved for it.
-typedef CrosswordSession = ({CrosswordPuzzle puzzle, Map<String, String> progress, bool completed});
+/// A loaded puzzle plus whatever progress the user's already saved for it,
+/// including which answers they had revealed rather than worked out.
+///
+/// [id] is the puzzle's own row: everything the screen writes back — progress,
+/// completion, solve events, editorial runs — is keyed on it rather than on
+/// the day, because a day can now hold several generations.
+typedef CrosswordSession = ({
+  int id,
+  String date,
+  CrosswordPuzzle puzzle,
+  Map<String, String> progress,
+  bool completed,
+  Set<String> revealed,
+});
 
-/// One day's entry in a difficulty's history list.
-typedef CrosswordHistoryEntry = ({String date, bool completed});
+/// One generated puzzle in a difficulty's history, with what the editorial
+/// pass did to it.
+typedef CrosswordHistoryEntry = ({
+  int id,
+  String date,
+  DateTime generatedAt,
+  bool completed,
 
-/// The scored word list the generator searches — built offline by
-/// `tool/pipeline/export_crossword_wordlist.py`, see PORTING_SPEC.md §1-§2.
+  /// True when an earlier puzzle exists for the same day — i.e. this one came
+  /// from "Start new".
+  bool isRegeneration,
+  List<CrosswordReviewRun> reviews,
+});
+
+/// One banned answer: the grid form, why it was rejected, where the verdict
+/// came from ('manual' when a person added it), and when.
+typedef CrosswordBannedAnswer = ({
+  String answer,
+  String reason,
+  String difficulty,
+  DateTime at,
+});
+
+/// What [CrosswordRepository.reviewInBackground] did, so the screen can say
+/// so rather than leaving the user guessing whether the pass ran at all.
+typedef CrosswordReviewReport = ({
+  /// Non-null when clues actually changed and were saved.
+  CrosswordPuzzle? revised,
+
+  /// 'off' | 'no_key' | 'already_reviewed' | 'unsupported' | or the run's own
+  /// outcome ('applied' | 'no_edits' | 'all_rejected' | 'not_applied' |
+  /// 'failed').
+  String status,
+  CrosswordReviewRun? run,
+});
+
+/// One run of the editorial pass, read back out of the debug log.
+typedef CrosswordReviewRun = ({
+  int id,
+  int puzzleId,
+  String date,
+  String difficulty,
+
+  /// The seed of the puzzle reviewed — the same identity the generator uses,
+  /// and what tells two runs of one day apart at a glance.
+  int puzzleSeed,
+  DateTime at,
+  String model,
+  String outcome,
+  String error,
+  int latencyMs,
+  int promptTokens,
+  int completionTokens,
+  int reasoningTokens,
+  double costUsd,
+  double entertainment,
+  String notes,
+  int cluesProposed,
+  int cluesApplied,
+  int wordsProposed,
+  int wordsApplied,
+  List<CrosswordProposedEdit> edits,
+});
+
+/// Totals across a difficulty's review log — the "what has this cost me"
+/// readout.
+typedef CrosswordReviewTotals = ({
+  int runs,
+  int failures,
+  int promptTokens,
+  int completionTokens,
+  int reasoningTokens,
+  double costUsd,
+  int cluesApplied,
+  int cluesProposed,
+});
+
+/// The Crosswordler word list the generator searches — built offline, see
+/// `tool/pipeline/export_crossword_wordlist.py` and PORTING_SPEC.md §1-§2.
 const _wordListAsset = 'assets/crossword/wordlist.tsv';
 
 // A word only makes sense as an SRS anchor if it's a single run of letters —
@@ -27,80 +119,6 @@ const _wordListAsset = 'assets/crossword/wordlist.tsv';
 // straight run of cells. Apostrophes are fine; they're simply dropped from
 // the grid form, which is the spec's `text` vs `display` split.
 final _anchorable = RegExp(r"^[A-Za-z']+$");
-
-/// How many previous puzzles' answers are barred from reappearing (§A.2
-/// requirement 10). These reach the *solver*, not just anchor selection —
-/// the reference implementation's own gap, and §A.4's one-line fix.
-const _recentPuzzleCount = 10;
-
-/// Common English function words have no dedicated part-of-speech in this
-/// dictionary's schema (only noun/adj/verb/adv), so their best-ranked entry
-/// is often some leftover noun sense instead — frequently a niche technical
-/// initialism (the bundled data's top-ranked "FOR" entry glosses as
-/// "Initialism of frame of reference", "HIS" as "health information
-/// system"). These are exactly the words a score-ordered solver reaches for
-/// constantly, so a small hand-written override covers the highest-traffic
-/// case cheaply, leaving the dictionary-derived clue pipeline for everything
-/// else.
-const _commonWordClues = {
-  'A': 'Indefinite article',
-  'AN': 'Indefinite article before a vowel sound',
-  'THE': 'Definite article',
-  'AND': 'Plus',
-  'OR': 'One option or the other',
-  'BUT': 'However',
-  'IF': 'In the event that',
-  'SO': 'Therefore',
-  'AS': 'In the same way that',
-  'AT': 'Preposition of location',
-  'BY': 'Near, or via',
-  'TO': 'Toward',
-  'OF': 'Belonging to',
-  'IN': 'Not outside',
-  'ON': 'Atop',
-  'UP': 'Not down',
-  'IS': 'Exists',
-  'ARE': 'Exist (plural)',
-  'WAS': 'Existed, once',
-  'WERE': 'Existed, in the past',
-  'BE': 'Exist',
-  'HIS': "Belonging to him",
-  'HER': "Belonging to her",
-  'ITS': "Belonging to it",
-  'OUR': 'Belonging to us',
-  'YOUR': 'Belonging to you',
-  'THEIR': 'Belonging to them',
-  'THEM': 'Those people, objectively',
-  'SHE': 'Female pronoun',
-  'HIM': 'Objective pronoun for a male',
-  'DID': 'Performed, in the past',
-  'HAS': 'Possesses',
-  'HAD': 'Possessed, in the past',
-  'NOT': 'In no way',
-  'NO': 'Negative reply',
-  'YES': 'Affirmative reply',
-  'ALL': 'Every one',
-  'ANY': 'Some, of any kind',
-  'EACH': 'Every single one',
-  'WHO': 'Which person',
-  'WHAT': 'Which thing',
-  'WHEN': 'At what time',
-  'WHERE': 'In what place',
-  'WHY': 'For what reason',
-  'HOW': 'In what way',
-  'CAN': 'Is able to',
-  'MAY': 'Might',
-  'MUST': 'Has to',
-  'WILL': 'Shall',
-  'SHALL': 'Will, formally',
-  'WOULD': 'Might, conditionally',
-  'COULD': 'Was able to',
-  'SHOULD': 'Ought to',
-  'ETC': 'And so on, for short',
-  'VIA': 'By way of',
-  'PER': 'For each',
-  'USA': 'America, in brief',
-};
 
 // Deliberately top-level, not a method or a closure written inline inside
 // one: Isolate.run refuses to send a closure whose captured-variable context
@@ -112,18 +130,34 @@ Future<CrosswordPuzzle?> _runGenerateInIsolate(CrosswordIsolateRequest request) 
   return Isolate.run(() => generateCrosswordFromSource(request));
 }
 
+Future<CrosswordRevision> _runReviseInIsolate(CrosswordRevisionRequest request) {
+  return Isolate.run(() => reviseCrosswordFromSource(request));
+}
+
 class CrosswordRepository {
   final UserDatabase _db;
   final StudyRepository _studyRepository;
   final SearchRepository _searchRepository;
+  final SettingsRepository _settingsRepository;
+  final CrosswordReviewService _reviewService;
   final _rand = Random();
 
-  /// Cached across generations — the asset is ~1.8 MB and Flutter caches the
+  /// Cached across generations — the asset is 8.9 MB and Flutter caches the
   /// decoded string itself, but keeping the reference avoids a re-decode on
   /// every regenerate.
   String? _wordListSource;
 
-  CrosswordRepository(this._db, this._studyRepository, this._searchRepository);
+  /// Puzzles a review is already in flight for, so a rebuild of the screen
+  /// can't start a second one.
+  final Set<String> _reviewsInFlight = {};
+
+  CrosswordRepository(
+    this._db,
+    this._studyRepository,
+    this._searchRepository,
+    this._settingsRepository, {
+    CrosswordReviewService reviewService = const CrosswordReviewService(),
+  }) : _reviewService = reviewService;
 
   static String today() {
     final now = DateTime.now();
@@ -133,42 +167,54 @@ class CrosswordRepository {
     return '$y-$m-$d';
   }
 
-  Future<CrosswordPuzzleRow?> _row(CrosswordDifficulty difficulty, String date) {
+  /// The newest puzzle generated for a day, or null if there is none.
+  Future<CrosswordPuzzleRow?> _latestRow(CrosswordDifficulty difficulty, String date) {
     return (_db.select(_db.crosswordPuzzles)
-          ..where((t) => t.puzzleDate.equals(date) & t.difficulty.equals(difficulty.storageKey)))
+          ..where((t) => t.puzzleDate.equals(date) & t.difficulty.equals(difficulty.storageKey))
+          ..orderBy([(t) => OrderingTerm.desc(t.id)])
+          ..limit(1))
         .getSingleOrNull();
   }
 
-  CrosswordSession _sessionFromRow(CrosswordPuzzleRow row) => (
-        puzzle: CrosswordPuzzle.fromJson(jsonDecode(row.gridJson) as Map<String, dynamic>),
-        progress: Map<String, String>.from(jsonDecode(row.progressJson) as Map),
-        completed: row.completed,
-      );
+  Future<CrosswordSession> _sessionFromRow(CrosswordPuzzleRow row) async {
+    final event = await (_db.select(_db.crosswordSolveEvents)
+          ..where((t) => t.puzzleId.equals(row.id)))
+        .getSingleOrNull();
+    return (
+      id: row.id,
+      date: row.puzzleDate,
+      puzzle: CrosswordPuzzle.fromJson(jsonDecode(row.gridJson) as Map<String, dynamic>),
+      progress: Map<String, String>.from(jsonDecode(row.progressJson) as Map),
+      completed: row.completed,
+      revealed: event == null ? const <String>{} : _decodeAnswers(event.revealedJson),
+    );
+  }
 
-  /// Loads today's puzzle for [difficulty] if one's already been generated,
-  /// otherwise builds one and persists it.
+  /// Loads the current puzzle for [difficulty] — the newest one generated for
+  /// today — building one if today has none yet.
   Future<CrosswordSession?> loadOrGenerate(CrosswordDifficulty difficulty) async {
-    final existing = await _row(difficulty, today());
-    if (existing != null) return _sessionFromRow(existing);
+    final existing = await _latestRow(difficulty, today());
+    if (existing != null) return await _sessionFromRow(existing);
     return _generateAndSave(difficulty, today());
   }
 
-  /// Loads a past day's puzzle for [difficulty], or `null` if none was ever
-  /// generated for that day — history only ever shows days that actually
-  /// happened, it never generates one for an arbitrary past date.
-  Future<CrosswordSession?> loadForDate(CrosswordDifficulty difficulty, String date) async {
-    final row = await _row(difficulty, date);
-    return row == null ? null : _sessionFromRow(row);
+  /// Loads one specific generated puzzle, or null if it has been deleted.
+  /// History addresses puzzles this way, since a day can hold several.
+  Future<CrosswordSession?> loadPuzzle(int puzzleId) async {
+    final row = await (_db.select(_db.crosswordPuzzles)..where((t) => t.id.equals(puzzleId)))
+        .getSingleOrNull();
+    return row == null ? null : await _sessionFromRow(row);
   }
 
-  /// Replaces today's puzzle for [difficulty] with a freshly generated one —
-  /// discards whatever progress was saved against the old one. Only ever
-  /// applies to today; regenerating a past day wouldn't make sense since
-  /// history is meant to reflect what that day actually looked like.
-  Future<CrosswordSession?> regenerate(CrosswordDifficulty difficulty) async {
-    await (_db.delete(_db.crosswordPuzzles)
-          ..where((t) => t.puzzleDate.equals(today()) & t.difficulty.equals(difficulty.storageKey)))
-        .go();
+  /// Generates an additional puzzle for today at [difficulty] and makes it the
+  /// current one.
+  ///
+  /// The previous puzzle is **kept**, with its progress and its editorial
+  /// runs: it is a history entry of its own, which is the only way to compare
+  /// what regenerating actually changed. It used to be deleted, and then a
+  /// second generation was indistinguishable from the first ever having
+  /// happened.
+  Future<CrosswordSession?> regenerate(CrosswordDifficulty difficulty) {
     // A fresh random seed rather than the day's deterministic one, so "Start
     // new" actually produces a different puzzle.
     return _generateAndSave(difficulty, today(), seed: _rand.nextInt(1 << 30));
@@ -181,52 +227,175 @@ class CrosswordRepository {
   }) async {
     final puzzle = await _generate(difficulty, date, seed: seed);
     if (puzzle == null) return null;
+    final id = await _insert(difficulty, date, puzzle);
+    return (
+      id: id,
+      date: date,
+      puzzle: puzzle,
+      progress: const <String, String>{},
+      completed: false,
+      revealed: const <String>{},
+    );
+  }
 
-    await _db.into(_db.crosswordPuzzles).insertOnConflictUpdate(
+  Future<int> _insert(
+    CrosswordDifficulty difficulty,
+    String date,
+    CrosswordPuzzle puzzle,
+  ) {
+    return _db.into(_db.crosswordPuzzles).insert(
           CrosswordPuzzlesCompanion.insert(
             puzzleDate: date,
             difficulty: difficulty.storageKey,
             gridJson: jsonEncode(puzzle.toJson()),
           ),
         );
-
-    return (puzzle: puzzle, progress: const <String, String>{}, completed: false);
   }
 
-  /// Every day a puzzle's been generated for [difficulty], most recent
-  /// first, with whether it was ever completed — for the history list.
-  Future<List<CrosswordHistoryEntry>> history(CrosswordDifficulty difficulty, {int limit = 60}) async {
+  /// Replaces the stored grid for one puzzle, leaving its progress alone —
+  /// how a reviewed puzzle's new clues are persisted.
+  Future<void> _updateGrid(int puzzleId, CrosswordPuzzle puzzle) async {
+    await (_db.update(_db.crosswordPuzzles)..where((t) => t.id.equals(puzzleId)))
+        .write(CrosswordPuzzlesCompanion(gridJson: Value(jsonEncode(puzzle.toJson()))));
+  }
+
+  /// Every puzzle generated for [difficulty], newest first, with whether it
+  /// was completed and every editorial run against it.
+  ///
+  /// One entry per *generation*, not per day: "Start new" adds a row, so a
+  /// day with three attempts shows three entries and each carries its own
+  /// review. That is the whole point of the list while the editorial pass is
+  /// being tuned — two runs of the same day sitting next to each other is how
+  /// you see what changed.
+  Future<List<CrosswordHistoryEntry>> history(CrosswordDifficulty difficulty,
+      {int limit = 60}) async {
     final rows = await (_db.select(_db.crosswordPuzzles)
           ..where((t) => t.difficulty.equals(difficulty.storageKey))
-          ..orderBy([(t) => OrderingTerm.desc(t.puzzleDate)])
+          ..orderBy([(t) => OrderingTerm.desc(t.id)])
           ..limit(limit))
         .get();
-    return [for (final r in rows) (date: r.puzzleDate, completed: r.completed)];
+
+    final runsByPuzzle = <int, List<CrosswordReviewRun>>{};
+    final runsByDate = <String, List<CrosswordReviewRun>>{};
+    for (final run in await reviewRuns(difficulty)) {
+      runsByPuzzle.putIfAbsent(run.puzzleId, () => []).add(run);
+      runsByDate.putIfAbsent(run.date, () => []).add(run);
+    }
+
+    // Oldest generation for a day is the original; anything after it came
+    // from "Start new".
+    final earliestForDate = <String, int>{};
+    for (final row in rows) {
+      final current = earliestForDate[row.puzzleDate];
+      if (current == null || row.id < current) earliestForDate[row.puzzleDate] = row.id;
+    }
+
+    return [
+      for (final row in rows)
+        (
+          id: row.id,
+          date: row.puzzleDate,
+          generatedAt: row.createdAt,
+          completed: row.completed,
+          isRegeneration: earliestForDate[row.puzzleDate] != row.id,
+          // Runs logged before puzzles had ids fall back to their day, so old
+          // history doesn't lose its costs.
+          reviews: runsByPuzzle[row.id] ??
+              (runsByDate[row.puzzleDate]?.where((r) => r.puzzleId == 0).toList() ??
+                  const <CrosswordReviewRun>[]),
+        ),
+    ];
   }
 
-  /// Answers used by the last [_recentPuzzleCount] puzzles at this size.
-  Future<Set<String>> _recentAnswers(CrosswordDifficulty difficulty) async {
-    final rows = await (_db.select(_db.crosswordPuzzles)
+  // -------------------------------------------------------------------
+  // Solve events (PORTING_SPEC.md §6.2a, APP_INTEGRATION.md §3)
+  // -------------------------------------------------------------------
+
+  /// Answers the user has **worked out unaided** in the last
+  /// [solveHistoryWindow] puzzles at this size.
+  ///
+  /// Scoped per difficulty, unlike the reference implementation's single
+  /// stream: the app runs three daily puzzles side by side, and one Mega
+  /// carries ~100 answers, so a shared window would blank most of a Mini's
+  /// vocabulary for a week.
+  Future<Set<String>> _blockedAnswers(CrosswordDifficulty difficulty) async {
+    final rows = await (_db.select(_db.crosswordSolveEvents)
           ..where((t) => t.difficulty.equals(difficulty.storageKey))
-          ..orderBy([(t) => OrderingTerm.desc(t.puzzleDate)])
-          ..limit(_recentPuzzleCount))
+          ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)])
+          ..limit(solveHistoryWindow))
         .get();
-    final answers = <String>{};
-    for (final row in rows) {
-      // Never let a historical row stop today's puzzle being built. This is
-      // the only place generation reads back puzzles the app wrote in earlier
-      // versions, so it is the one place where a schema drift that was
-      // harmless when it happened turns into "no crossword, ever" — which is
-      // exactly what a missing `entryId` on year-old rows did. Repeat
-      // avoidance is a nicety; shipping a puzzle is not.
-      try {
-        final puzzle = CrosswordPuzzle.fromJson(jsonDecode(row.gridJson) as Map<String, dynamic>);
-        answers.addAll(puzzle.words.map((w) => w.answer));
-      } catch (_) {
-        continue;
-      }
+    final events = [
+      for (final row in rows)
+        CrosswordSolveEvent(
+          puzzleId: '${row.puzzleDate}/${row.difficulty}',
+          solved: _decodeAnswers(row.solvedJson),
+          revealed: _decodeAnswers(row.revealedJson),
+        ),
+    ];
+    return blockedAnswersFrom(events);
+  }
+
+  Set<String> _decodeAnswers(String json) {
+    try {
+      return {for (final a in jsonDecode(json) as List) a as String};
+    } catch (_) {
+      // Never let a malformed historical row stop today's puzzle being
+      // built. Repeat avoidance is a nicety; shipping a puzzle is not.
+      return const {};
     }
-    return answers;
+  }
+
+  /// Records what the user has solved and revealed so far in one puzzle.
+  ///
+  /// Called as they play rather than only at completion, because a puzzle
+  /// they solve most of and abandon still taught them those answers.
+  Future<void> recordSolveState(
+    int puzzleId,
+    CrosswordDifficulty difficulty,
+    String date, {
+    required Set<String> solved,
+    required Set<String> revealed,
+  }) async {
+    final companion = CrosswordSolveEventsCompanion(
+      puzzleId: Value(puzzleId),
+      puzzleDate: Value(date),
+      difficulty: Value(difficulty.storageKey),
+      solvedJson: Value(jsonEncode(solved.toList()..sort())),
+      revealedJson: Value(jsonEncode(revealed.toList()..sort())),
+      updatedAt: Value(DateTime.now()),
+    );
+    // One row per puzzle, updated as they play. Written as an explicit
+    // select-then-write rather than an upsert because the table has no unique
+    // key to conflict on any more — puzzles are addressed by id.
+    final existing = await (_db.select(_db.crosswordSolveEvents)
+          ..where((t) => t.puzzleId.equals(puzzleId)))
+        .getSingleOrNull();
+    if (existing == null) {
+      await _db.into(_db.crosswordSolveEvents).insert(companion);
+    } else {
+      await (_db.update(_db.crosswordSolveEvents)..where((t) => t.id.equals(existing.id)))
+          .write(companion);
+    }
+  }
+
+  /// Credits the SRS for study words the user solved unaided.
+  ///
+  /// An answer worked out in a crossword is a genuine retrieval event for
+  /// that word, which is exactly what the schedule wants to know
+  /// (APP_INTEGRATION.md §3). Graded [Grade.good] rather than `easy`: they
+  /// had the crossings to help.
+  Future<void> creditStudyWords(Iterable<int> entryIds) async {
+    if (entryIds.isEmpty) return;
+    final cards = await _studyRepository.allStudyingCards(limit: 500);
+    final wanted = entryIds.toSet();
+    for (final card in cards) {
+      if (!wanted.contains(card.entryId)) continue;
+      // Only credit a card that is actually due; grading one that isn't
+      // would push its interval out on a review the schedule never asked
+      // for.
+      if (card.dueAt.isAfter(DateTime.now())) continue;
+      await _studyRepository.grade(card, Grade.good);
+    }
   }
 
   Future<String> _loadWordList() async =>
@@ -245,88 +414,436 @@ class CrosswordRepository {
     // `fitAnchors` alternatives when a skeleton has no slot of the right
     // length — see its graceful degradation.
     final seenEntryIds = <int>{};
-    final srsWords = <(String, String, int)>[];
+    final candidates = <({String text, String display, int entryId})>[];
     for (final source in [due, all]) {
       for (final card in source) {
-        if (srsWords.length >= 12) break;
+        if (candidates.length >= 12) break;
         if (!seenEntryIds.add(card.entryId)) continue;
         if (!_anchorable.hasMatch(card.headword)) continue;
         final text = card.headword.replaceAll("'", '').toUpperCase();
         if (text.length < 3 || text.length > difficulty.size) continue;
-        srsWords.add((text, card.headword, card.entryId));
+        candidates.add((text: text, display: card.headword, entryId: card.entryId));
       }
     }
+
+    // §7.2 is explicit that an unclued anchor lands a stub clue in the
+    // puzzle's most prominent slot. A study word the asset has never heard of
+    // would do exactly that, so a clue is resolved here — from the app's own
+    // dictionary, which is the one clue source the asset doesn't have and the
+    // generator's isolate can't reach.
+    final clueOptions = await _searchRepository.crosswordClueOptions({
+      for (final candidate in candidates) candidate.entryId: candidate.text,
+    });
+    final srsWords = <CrosswordSrsWord>[
+      for (final candidate in candidates)
+        (
+          text: candidate.text,
+          display: candidate.display,
+          entryId: candidate.entryId,
+          clue: (clueOptions[candidate.entryId] ?? const <String>[])
+              .where((option) => !isGiveaway(option, candidate.text))
+              .firstOrNull,
+        ),
+    ];
 
     final request = CrosswordIsolateRequest(
       wordListSource: await _loadWordList(),
       difficulty: difficulty,
       srsWords: srsWords,
-      recentUsage: await _recentAnswers(difficulty),
+      // The cooldown and the ban list are both "never put this in the grid",
+      // so the solver takes their union — but they mean different things and
+      // are kept apart everywhere else: one expires after ten puzzles, the
+      // other is a standing verdict.
+      blockedAnswers: {
+        ...await _blockedAnswers(difficulty),
+        ...await _bannedAnswerSet(),
+      },
       weekday: DateTime.parse(date).weekday,
       // Seeded from the date and size so a given day's puzzle is
-      // reproducible (§12), unless the user asked for a new one.
+      // reproducible (§12), unless the user asked for a new one. The seed is
+      // stored on the puzzle: (seed, size, weekday, srsWords, blockedAnswers)
+      // is the whole of a puzzle's identity.
       seed: seed ?? Object.hash(date, difficulty.storageKey),
     );
 
-    // Real CPU-bound backtracking search — seconds on a Mega grid — so it
-    // goes on its own isolate rather than freezing the UI. Routed through a
-    // top-level function (see _runGenerateInIsolate) rather than an inline
+    // Real CPU-bound backtracking search — up to seconds on a Mega grid — so
+    // it goes on its own isolate rather than freezing the UI. Routed through
+    // a top-level function (see _runGenerateInIsolate) rather than an inline
     // closure, which would drag `this` and its unsendable database
     // connection across the boundary.
-    final puzzle = await _runGenerateInIsolate(request);
-    if (puzzle == null) return null;
-
-    return _withClues(puzzle);
+    return _runGenerateInIsolate(request);
   }
 
-  /// Resolves clue text for the ~10-100 words that actually made it into the
-  /// grid — not the whole 49,000-entry pool.
-  ///
-  /// The spec bakes a clue into the word list asset because its clue source
-  /// (WordNet) isn't available at runtime, and is candid that the result is
-  /// the system's weakest part (§8) and the highest-value thing to replace
-  /// (§A.4). This app's clue source *is* available at runtime: the bundled
-  /// dictionary yields definition, synonym, "___, for short" and
-  /// fill-in-the-blank phrasings from each word's earliest senses. What is
-  /// ported verbatim is the part §8 says to port exactly — the giveaway
-  /// filter, applied here as the final gate.
-  Future<CrosswordPuzzle> _withClues(CrosswordPuzzle puzzle) async {
-    final headwordsByEntryId = <int, String>{
-      for (final w in puzzle.words)
-        if (w.entryId >= 0) w.entryId: w.answer,
-    };
-    final clueOptions = await _searchRepository.crosswordClueOptions(headwordsByEntryId);
+  // -------------------------------------------------------------------
+  // The editorial pass (PORTING_SPEC.md §9.3-§9.4)
+  // -------------------------------------------------------------------
 
-    String pickClue(int entryId, String answer) {
-      final override = _commonWordClues[answer];
-      if (override != null) return override;
-      final options = [
-        for (final option in clueOptions[entryId] ?? const <String>[])
-          if (!isGiveaway(option, answer)) option,
-      ];
-      if (options.isEmpty) return 'A ${answer.length}-letter word.';
-      return options[_rand.nextInt(options.length)];
+  /// Whether a review could run at all — no key, no pass, and no complaint.
+  bool get reviewConfigured => _reviewService.isConfigured;
+
+  /// Whether the debug switch currently allows the pass to spend money.
+  Future<bool> get reviewEnabled => _settingsRepository.crosswordReviewEnabled();
+
+  /// Reviews a puzzle in the background and, if anything survives
+  /// verification, persists the revision.
+  ///
+  /// **Never call this on the click path.** The measured latency is ~15
+  /// seconds and flat in puzzle size, so fifteen seconds between tapping Play
+  /// and seeing a grid is what putting it there would cost. The caller shows
+  /// the deterministic puzzle first and swaps the clues in only if the review
+  /// lands before the user has started — never mid-solve.
+  ///
+  /// Always reports what happened, including the reasons it did nothing:
+  /// silence is indistinguishable from a broken key, and the whole point of
+  /// the debug switch is being able to tell.
+  Future<CrosswordReviewReport> reviewInBackground(
+    int puzzleId,
+    CrosswordDifficulty difficulty,
+    String date,
+    CrosswordPuzzle puzzle,
+  ) async {
+    const nothing = (revised: null, run: null);
+    if (puzzle.reviewed) return (revised: null, status: 'already_reviewed', run: null);
+    if (!reviewConfigured) return (revised: null, status: 'no_key', run: null);
+    // A puzzle saved before slot ids were persisted can't be reviewed: the
+    // reviewer keys its edits by them.
+    if (puzzle.words.any((w) => w.slotId < 0)) {
+      return (revised: null, status: 'unsupported', run: null);
+    }
+    // The debug switch. Deliberately checked *before* the puzzle is marked
+    // reviewed, so turning the pass back on later still reviews this puzzle
+    // rather than skipping it forever.
+    if (!await _settingsRepository.crosswordReviewEnabled()) {
+      return (revised: null, status: 'off', run: null);
     }
 
-    return CrosswordPuzzle(
-      width: puzzle.width,
-      height: puzzle.height,
-      words: [for (final w in puzzle.words) w.copyWith(clue: pickClue(w.entryId, w.answer))],
-      themeName: puzzle.themeName,
-      themeKind: puzzle.themeKind,
-      qualityScore: puzzle.qualityScore,
+    final key = '$puzzleId';
+    if (!_reviewsInFlight.add(key)) {
+      return (revised: null, status: 'already_reviewed', run: null);
+    }
+    try {
+      final weekday = DateTime.parse(date).weekday;
+      final result = await _reviewService.review(puzzle, weekday: weekday);
+      final verdict = result.verdict;
+
+      if (result.error.isNotEmpty) {
+        // A failed call is not an answer, so the puzzle is left unreviewed
+        // and will be tried again next time it is opened.
+        final run = await _logReview(puzzleId, difficulty, date, puzzle, result,
+            outcome: 'failed');
+        return (revised: null, status: 'failed', run: run);
+      }
+
+      if (verdict.isEmpty) {
+        // An empty verdict *is* a real answer ("this puzzle is fine"), so the
+        // puzzle is marked reviewed and not paid for twice.
+        final run = await _logReview(puzzleId, difficulty, date, puzzle, result,
+            outcome: 'no_edits');
+        await _updateGrid(puzzleId, puzzle.copyWith(reviewed: true));
+        return (revised: null, status: 'no_edits', run: run);
+      }
+
+      // The words this verdict rejects are recorded before the re-fill, so
+      // they stay out of future puzzles even if this grid can't lose them.
+      final byId = {for (final w in puzzle.words) w.slotId: w};
+      final anchors = puzzle.anchors.toSet();
+      await _banAnswers(difficulty, {
+        for (final ban in verdict.bannedAnswers.entries)
+          if (byId[ban.key] != null && !anchors.contains(byId[ban.key]!.answer))
+            byId[ban.key]!.answer: ban.value,
+      });
+
+      final revision = await _runReviseInIsolate(CrosswordRevisionRequest(
+        wordListSource: await _loadWordList(),
+        puzzle: puzzle,
+        verdict: verdict,
+        blockedAnswers: {
+          ...await _blockedAnswers(difficulty),
+          ...await _bannedAnswerSet(),
+        },
+        seed: puzzle.seed,
+      ));
+
+      if (revision.wordsRejectedReason.isNotEmpty) {
+        debugPrint('crossword review: word edits rejected '
+            '(${revision.wordsRejectedReason})');
+      }
+
+      if (!revision.changed) {
+        final run = await _logReview(puzzleId, difficulty, date, puzzle, result,
+            outcome: 'all_rejected', revision: revision);
+        await _updateGrid(puzzleId, revision.puzzle.copyWith(reviewed: true));
+        return (revised: null, status: 'all_rejected', run: run);
+      }
+
+      // Never change a puzzle underneath someone who has started it. Word
+      // edits re-solve the grid, so letters they have already entered would
+      // stop matching their own puzzle; even a pure clue swap is disorienting
+      // mid-solve. The review is dropped rather than deferred: it was written
+      // against this exact grid, and re-reviewing a fresh puzzle is cheaper
+      // than reasoning about a stale verdict.
+      final current = await (_db.select(_db.crosswordPuzzles)
+            ..where((t) => t.id.equals(puzzleId)))
+          .getSingleOrNull();
+      final started = current == null ||
+          current.completed ||
+          (jsonDecode(current.progressJson) as Map).isNotEmpty;
+      if (started) {
+        final run = await _logReview(puzzleId, difficulty, date, puzzle, result,
+            outcome: 'not_applied', revision: revision);
+        if (current != null) {
+          await _updateGrid(puzzleId, puzzle.copyWith(reviewed: true));
+        }
+        return (revised: null, status: 'not_applied', run: run);
+      }
+
+      final run = await _logReview(puzzleId, difficulty, date, puzzle, result,
+          outcome: 'applied', revision: revision);
+      await _updateGrid(puzzleId, revision.puzzle);
+      return (revised: revision.puzzle, status: 'applied', run: run);
+    } catch (error) {
+      // The pass is an upgrade and nothing more: any failure leaves the
+      // deterministic puzzle exactly as it was.
+      debugPrint('crossword review failed: $error');
+      return (revised: nothing.revised, status: 'failed', run: nothing.run);
+    } finally {
+      _reviewsInFlight.remove(key);
+    }
+  }
+
+  /// Records what one run did and what it billed — the debug log behind the
+  /// history screen's cost readout.
+  ///
+  /// Failures are logged too, and deliberately: a call that returned HTTP 429
+  /// or timed out after 45s is exactly what you want to see when the pass
+  /// appears to be doing nothing.
+  Future<CrosswordReviewRun> _logReview(
+    int puzzleId,
+    CrosswordDifficulty difficulty,
+    String date,
+    CrosswordPuzzle puzzle,
+    CrosswordReviewResult result, {
+    required String outcome,
+    CrosswordRevision? revision,
+  }) async {
+    final id = await _db.into(_db.crosswordReviewLog).insert(
+          CrosswordReviewLogCompanion.insert(
+            puzzleId: Value(puzzleId),
+            puzzleDate: date,
+            difficulty: difficulty.storageKey,
+            puzzleSeed: Value(puzzle.seed),
+            model: Value(result.model),
+            outcome: outcome,
+            error: Value(result.error),
+            latencyMs: Value(result.latencyMs),
+            promptTokens: Value(result.promptTokens),
+            completionTokens: Value(result.completionTokens),
+            reasoningTokens: Value(result.reasoningTokens),
+            costUsd: Value(estimateCostUsd(
+              model: result.model,
+              promptTokens: result.promptTokens,
+              completionTokens: result.completionTokens,
+            )),
+            entertainment: Value(result.verdict.entertainment),
+            notes: Value(result.verdict.notes),
+            cluesProposed: Value(
+                revision?.cluesProposed ?? result.verdict.clueEdits.length),
+            cluesApplied: Value(revision?.cluesApplied ?? 0),
+            wordsProposed: Value(
+                revision?.wordsProposed ?? result.verdict.bannedAnswers.length),
+            wordsApplied: Value(revision?.wordsApplied ?? 0),
+            editsJson: Value(jsonEncode(
+                [for (final edit in revision?.edits ?? const []) edit.toJson()])),
+          ),
+        );
+    final row = await (_db.select(_db.crosswordReviewLog)..where((t) => t.id.equals(id)))
+        .getSingle();
+    return _runFromRow(row);
+  }
+
+  /// The editorial runs against one specific puzzle, newest first.
+  Future<List<CrosswordReviewRun>> reviewRunsForPuzzle(int puzzleId) async {
+    final rows = await (_db.select(_db.crosswordReviewLog)
+          ..where((t) => t.puzzleId.equals(puzzleId))
+          ..orderBy([(t) => OrderingTerm.desc(t.id)]))
+        .get();
+    return [for (final row in rows) _runFromRow(row)];
+  }
+
+  /// Every logged review for one difficulty, most recent first.
+  Future<List<CrosswordReviewRun>> reviewRuns(
+    CrosswordDifficulty difficulty, {
+    int limit = 200,
+  }) async {
+    final rows = await (_db.select(_db.crosswordReviewLog)
+          ..where((t) => t.difficulty.equals(difficulty.storageKey))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+    return [for (final row in rows) _runFromRow(row)];
+  }
+
+  CrosswordReviewRun _runFromRow(CrosswordReviewLogRow row) {
+    List<CrosswordProposedEdit> edits;
+    try {
+      edits = [
+        for (final edit in jsonDecode(row.editsJson) as List)
+          CrosswordProposedEdit.fromJson(edit as Map<String, dynamic>),
+      ];
+    } catch (_) {
+      edits = const [];
+    }
+    return (
+      id: row.id,
+      puzzleId: row.puzzleId,
+      date: row.puzzleDate,
+      difficulty: row.difficulty,
+      puzzleSeed: row.puzzleSeed,
+      at: row.createdAt,
+      model: row.model,
+      outcome: row.outcome,
+      error: row.error,
+      latencyMs: row.latencyMs,
+      promptTokens: row.promptTokens,
+      completionTokens: row.completionTokens,
+      reasoningTokens: row.reasoningTokens,
+      costUsd: row.costUsd,
+      entertainment: row.entertainment,
+      notes: row.notes,
+      cluesProposed: row.cluesProposed,
+      cluesApplied: row.cluesApplied,
+      wordsProposed: row.wordsProposed,
+      wordsApplied: row.wordsApplied,
+      edits: edits,
     );
   }
 
-  Future<void> saveProgress(CrosswordDifficulty difficulty, String date, Map<String, String> filledLetters) async {
-    await (_db.update(_db.crosswordPuzzles)
-          ..where((t) => t.puzzleDate.equals(date) & t.difficulty.equals(difficulty.storageKey)))
+  /// Totals across [difficulty]'s whole review log.
+  ///
+  /// Reads the rows rather than going through [reviewRuns]: that would parse
+  /// every run's stored edit list — a hundred clue rewrites apiece — only to
+  /// add up token counts.
+  Future<CrosswordReviewTotals> reviewTotals(CrosswordDifficulty difficulty) async {
+    final rows = await (_db.select(_db.crosswordReviewLog)
+          ..where((t) => t.difficulty.equals(difficulty.storageKey)))
+        .get();
+    var prompt = 0, completion = 0, reasoning = 0, applied = 0, proposed = 0, failures = 0;
+    var cost = 0.0;
+    for (final row in rows) {
+      prompt += row.promptTokens;
+      completion += row.completionTokens;
+      reasoning += row.reasoningTokens;
+      cost += row.costUsd;
+      applied += row.cluesApplied + row.wordsApplied;
+      proposed += row.cluesProposed + row.wordsProposed;
+      if (row.outcome == 'failed') failures++;
+    }
+    return (
+      runs: rows.length,
+      failures: failures,
+      promptTokens: prompt,
+      completionTokens: completion,
+      reasoningTokens: reasoning,
+      costUsd: cost,
+      cluesApplied: applied,
+      cluesProposed: proposed,
+    );
+  }
+
+  /// Every banned answer, newest first.
+  Future<List<CrosswordBannedAnswer>> bannedAnswers() async {
+    final rows = await (_db.select(_db.crosswordBannedAnswers)
+          ..orderBy([(t) => OrderingTerm.desc(t.bannedAt)]))
+        .get();
+    return [
+      for (final r in rows)
+        (answer: r.answer, reason: r.reason, difficulty: r.difficulty, at: r.bannedAt),
+    ];
+  }
+
+  /// Bans an answer by hand — the editorial pass is one source of verdicts,
+  /// not the only one. A word that keeps turning up badly is quicker to add
+  /// here than to round-trip through the word-list export.
+  ///
+  /// Normalizes to grid form, so "I do's" and IDOS are the same ban. Returns
+  /// the normalized answer, or null if there were no letters in it.
+  Future<String?> banAnswer(String answer, {String reason = ''}) async {
+    final text = normalizeAnswer(answer);
+    if (text.isEmpty) return null;
+    await _db.into(_db.crosswordBannedAnswers).insert(
+          CrosswordBannedAnswersCompanion.insert(
+            answer: text,
+            reason: Value(reason),
+            difficulty: const Value('manual'),
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+    return text;
+  }
+
+  /// Rewrites the note on an existing ban.
+  Future<void> updateBanReason(String answer, String reason) async {
+    await (_db.update(_db.crosswordBannedAnswers)..where((t) => t.answer.equals(answer)))
+        .write(CrosswordBannedAnswersCompanion(reason: Value(reason)));
+  }
+
+  Future<Set<String>> _bannedAnswerSet() async {
+    final rows = await _db.select(_db.crosswordBannedAnswers).get();
+    return {for (final r in rows) r.answer};
+  }
+
+  /// Records the reviewer's verdict on an answer so it stays out of future
+  /// puzzles.
+  ///
+  /// Written even when the re-fill failed: the word is no less unfair for the
+  /// grid having been unable to lose it, and the next puzzle simply won't
+  /// contain it.
+  Future<void> _banAnswers(
+    CrosswordDifficulty difficulty,
+    Map<String, String> answersAndReasons,
+  ) async {
+    if (answersAndReasons.isEmpty) return;
+    await _db.batch((batch) {
+      for (final entry in answersAndReasons.entries) {
+        batch.insert(
+          _db.crosswordBannedAnswers,
+          CrosswordBannedAnswersCompanion.insert(
+            answer: entry.key,
+            reason: Value(entry.value),
+            difficulty: Value(difficulty.storageKey),
+          ),
+          // First verdict wins; a later run re-banning the same word doesn't
+          // overwrite the reason that was actually given for it.
+          mode: InsertMode.insertOrIgnore,
+        );
+      }
+    });
+  }
+
+  /// Lifts a ban — the debug screen's undo, for when the reviewer was wrong.
+  Future<void> unbanAnswer(String answer) async {
+    await (_db.delete(_db.crosswordBannedAnswers)..where((t) => t.answer.equals(answer)))
+        .go();
+  }
+
+  Future<void> clearBannedAnswers() async {
+    await _db.delete(_db.crosswordBannedAnswers).go();
+  }
+
+  /// Clears the review log for one difficulty — the debug screen's reset.
+  Future<void> clearReviewLog(CrosswordDifficulty difficulty) async {
+    await (_db.delete(_db.crosswordReviewLog)
+          ..where((t) => t.difficulty.equals(difficulty.storageKey)))
+        .go();
+  }
+
+  Future<void> saveProgress(int puzzleId, Map<String, String> filledLetters) async {
+    await (_db.update(_db.crosswordPuzzles)..where((t) => t.id.equals(puzzleId)))
         .write(CrosswordPuzzlesCompanion(progressJson: Value(jsonEncode(filledLetters))));
   }
 
-  Future<void> markCompleted(CrosswordDifficulty difficulty, String date) async {
-    await (_db.update(_db.crosswordPuzzles)
-          ..where((t) => t.puzzleDate.equals(date) & t.difficulty.equals(difficulty.storageKey)))
+  Future<void> markCompleted(int puzzleId) async {
+    await (_db.update(_db.crosswordPuzzles)..where((t) => t.id.equals(puzzleId)))
         .write(const CrosswordPuzzlesCompanion(completed: Value(true)));
   }
 }
