@@ -1,3 +1,5 @@
+import 'dart:math' show max, min;
+
 import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/providers.dart';
 import '../../data/repositories/crossword_repository.dart';
 import '../../domain/crossword/crossword_models.dart';
+import '../progress/progress_format.dart';
 
 String _cellKey(int row, int col) => '$row,$col';
 
@@ -26,7 +29,8 @@ class CrosswordScreen extends ConsumerStatefulWidget {
   ConsumerState<CrosswordScreen> createState() => _CrosswordScreenState();
 }
 
-class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
+class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
+    with WidgetsBindingObserver {
   /// The puzzle row currently on screen. Null until the session loads, since
   /// a puzzle for today may still be being generated.
   int? _puzzleId;
@@ -78,8 +82,129 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
 
   String? _selectedCell;
   CrosswordDirection _direction = CrosswordDirection.across;
+
+  /// How the cursor moves after a letter is typed. Tapping a cell that
+  /// already has a letter means "I'm changing this word": the cursor steps
+  /// through every box in turn, filled or not. Tapping an empty cell means
+  /// "I'm filling this in": the cursor skips boxes crossings have already
+  /// filled and lands on the next empty one.
+  bool _overwrite = false;
   bool _completed = false;
   bool _reviewRequested = false;
+
+  /// Active solving time. [_bankedMs] is what earlier sittings already
+  /// recorded; [_clock] runs only while the grid is on screen and the app
+  /// is in front, so a puzzle left open overnight doesn't clock the night.
+  /// Together they are what gets written to the play record.
+  int _bankedMs = 0;
+  final Stopwatch _clock = Stopwatch();
+
+  int get _activeMs => _bankedMs + _clock.elapsedMilliseconds;
+
+  /// The board's pan/zoom. The grid always spans the full width — never
+  /// letterboxed — and is taller than its viewport when the puzzle is big
+  /// or the keyboard is up, so at scale 1 it scrolls vertically; pinching
+  /// zooms in on a region. [_followSelection] keeps the cell being typed
+  /// into on screen either way.
+  final TransformationController _board = TransformationController();
+
+  /// The grid's cell size and the viewport it's shown through, in scene
+  /// coordinates — set by [_BoardViewport] on layout, read when following
+  /// the selection.
+  ({double cell, Size grid, Size viewport, double hiddenBottom})? _boardMetrics;
+
+  /// Where the board viewport's bottom edge sits on screen, measured after
+  /// layout. The body never resizes for the keyboard (see `build`), so this
+  /// is stable and lets the keyboard's overlap with the board be worked out
+  /// from the view insets alone.
+  final GlobalKey _viewportKey = GlobalKey();
+  double? _viewportBottomOnScreen;
+
+  /// The viewport's screen position just changed; rebuild so the keyboard
+  /// overlap is recomputed from it.
+  void _remeasured() {
+    if (mounted) setState(() {});
+  }
+
+  /// What the last follow was for, so a rebuild that changes neither the
+  /// selection nor the viewport doesn't pan the board around under a
+  /// finger that is dragging it.
+  ({String cell, Size viewport, double hiddenBottom})? _followed;
+
+  /// Pans the board so the selected cell is in view — after a tap on a
+  /// cell or a clue, after typing advances the cursor, and after the
+  /// keyboard shrinks the viewport. Only moves when the cell is actually
+  /// out of view, and then centres it, so the board stays put while a word
+  /// is typed across the visible part. Runs after the frame that changed
+  /// things, so it never fights the layout.
+  void _followSelection() {
+    final metrics = _boardMetrics;
+    final cell = _selectedCell;
+    if (metrics == null || cell == null) return;
+    final key = (cell: cell, viewport: metrics.viewport, hiddenBottom: metrics.hiddenBottom);
+    if (_followed == key) return;
+    _followed = key;
+
+    // The part of the viewport the keyboard isn't covering. The board keeps
+    // its size when the keyboard comes up; it is panned so the cell being
+    // typed into sits in this strip instead.
+    final visibleHeight = max(metrics.cell, metrics.viewport.height - metrics.hiddenBottom);
+
+    final scale = _board.value.getMaxScaleOnAxis();
+    final parts = cell.split(',');
+    final r = int.parse(parts[0]);
+    final c = int.parse(parts[1]);
+    final target = Rect.fromLTWH(c * metrics.cell, r * metrics.cell, metrics.cell, metrics.cell);
+    final t = _board.value.getTranslation();
+    final visible = Rect.fromLTWH(
+      -t.x / scale,
+      -t.y / scale,
+      metrics.viewport.width / scale,
+      visibleHeight / scale,
+    );
+    if (visible.contains(target.topLeft) && visible.contains(target.bottomRight)) return;
+
+    // Centre the cell in the visible strip, clamped so the board never pans
+    // past its own edge — the lower bound is how far the scaled grid
+    // overhangs the strip, which with the keyboard up lets a board that
+    // fits the screen slide up under the app bar by up to the overlap.
+    final minX = min(0.0, metrics.viewport.width - metrics.grid.width * scale);
+    final minY = min(0.0, visibleHeight - metrics.grid.height * scale);
+    final dx = (metrics.viewport.width / 2 - target.center.dx * scale).clamp(minX, 0.0);
+    final dy = (visibleHeight / 2 - target.center.dy * scale).clamp(minY, 0.0);
+    _board.value = Matrix4.identity()
+      ..translateByDouble(dx, dy, 0, 1)
+      ..scaleByDouble(scale, scale, 1, 1);
+  }
+
+  /// Read once: `ref` can't be used from `dispose`, and that is exactly
+  /// when the last play time has to be written.
+  late final CrosswordRepository _repo;
+
+  @override
+  void initState() {
+    super.initState();
+    _repo = ref.read(crosswordRepositoryProvider);
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (!_completed && _puzzleId != null) _clock.start();
+    } else {
+      // Bank the time on the way out rather than the way back in: a killed
+      // app never comes back to write it.
+      _clock.stop();
+      _flushPlayTime();
+    }
+  }
+
+  void _flushPlayTime() {
+    final puzzleId = _puzzleId;
+    if (puzzleId == null || _completed) return;
+    _repo.recordPlayTime(puzzleId, _activeMs, aided: _revealedAnswers.isNotEmpty);
+  }
 
   /// What the editorial pass is doing to *this* puzzle, for the status strip.
   /// Empty until the session has loaded and the decision has been made.
@@ -87,6 +212,10 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
 
   @override
   void dispose() {
+    _clock.stop();
+    _flushPlayTime();
+    WidgetsBinding.instance.removeObserver(this);
+    _board.dispose();
     _focusNode.dispose();
     _controller.dispose();
     super.dispose();
@@ -120,10 +249,27 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
       ..clear()
       ..addAll(session.revealed);
     _completed = session.completed;
-    if (puzzle.words.isNotEmpty) {
-      final first = puzzle.words.first;
-      _selectedCell = _cellKey(first.row, first.col);
-      _direction = first.direction;
+    _bankedMs = session.activeMs;
+    _clock
+      ..stop()
+      ..reset();
+    if (!_completed) {
+      // The clock starts when the clues are in front of them, not on the
+      // first keystroke — reading the clues is solving too.
+      ref.read(crosswordRepositoryProvider).startPlay(session.id, widget.difficulty);
+      _clock.start();
+    }
+    if (_clueOrder.isNotEmpty) {
+      // Start where the next letter belongs: the first clue with an empty
+      // box (a resumed puzzle shouldn't open on an answer already in), or
+      // the first clue if the grid is full.
+      final start = _clueOrder.firstWhere(
+        (w) => _firstEmptyCell(w) != null,
+        orElse: () => _clueOrder.first,
+      );
+      _selectedCell = _firstEmptyCell(start) ?? _cellKey(start.row, start.col);
+      _direction = start.direction;
+      _overwrite = _firstEmptyCell(start) == null;
     }
     _maybeReview(puzzle);
   }
@@ -204,18 +350,32 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
                 : CrosswordDirection.across)
             : CrosswordDirection.down;
       }
+      _overwrite = _filled[key] != null;
       _wrongCells.clear();
     });
     _showKeyboard();
   }
 
+  /// Selects [word] at the box that makes sense to type into: its first
+  /// empty one, or — when it's already full — its first box, in overwrite
+  /// mode.
   void _selectWord(CrosswordWordPlacement word) {
+    final firstEmpty = _firstEmptyCell(word);
     setState(() {
-      _selectedCell = _cellKey(word.row, word.col);
+      _selectedCell = firstEmpty ?? _cellKey(word.row, word.col);
       _direction = word.direction;
+      _overwrite = firstEmpty == null;
       _wrongCells.clear();
     });
     _showKeyboard();
+  }
+
+  String? _firstEmptyCell(CrosswordWordPlacement word) {
+    for (final c in word.cells) {
+      final key = _cellKey(c.$1, c.$2);
+      if (_filled[key] == null) return key;
+    }
+    return null;
   }
 
   // Once the keyboard's been dismissed (system back, or its own dismiss
@@ -245,24 +405,50 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
       }
       return;
     }
-    // Skip past cells this word already has letters in (typically filled by
-    // a crossing word already solved) and land on the next empty one, the
-    // standard crossword "type-through" feel — jumps to the next word
-    // entirely once every remaining cell in this one is already filled.
-    for (var i = index + 1; i < cells.length; i++) {
-      final key = _cellKey(cells[i].$1, cells[i].$2);
-      if (_filled[key] == null) {
-        setState(() => _selectedCell = key);
+    if (_overwrite) {
+      // Changing a word: every box in turn, whatever it holds.
+      if (index + 1 < cells.length) {
+        setState(() => _selectedCell = _cellKey(cells[index + 1].$1, cells[index + 1].$2));
         return;
       }
+    } else {
+      // Filling a word in: skip past boxes crossings have already filled
+      // (the standard "type-through" feel) and land on the next empty one.
+      for (var i = index + 1; i < cells.length; i++) {
+        final key = _cellKey(cells[i].$1, cells[i].$2);
+        if (_filled[key] == null) {
+          setState(() => _selectedCell = key);
+          return;
+        }
+      }
     }
-    _jumpToNextWord(word);
+    // Off the end of this word: on to the next one that still needs
+    // letters, rather than the next clue regardless — a finished word is
+    // not where the next keystroke belongs.
+    _jumpToNextUnfinishedWord(word);
   }
 
+  /// The next clue in order — the clue bar's arrows, where "next" means
+  /// the neighbour whether or not it's done.
   void _jumpToNextWord(CrosswordWordPlacement current) {
     final index = _clueOrder.indexOf(current);
     if (index == -1 || _clueOrder.length <= 1) return;
     _selectWord(_clueOrder[(index + 1) % _clueOrder.length]);
+  }
+
+  /// The next clue in order with an empty box, searching all the way round;
+  /// falls back to the plain next clue when the grid is full.
+  void _jumpToNextUnfinishedWord(CrosswordWordPlacement current) {
+    final index = _clueOrder.indexOf(current);
+    if (index == -1 || _clueOrder.length <= 1) return;
+    for (var step = 1; step < _clueOrder.length; step++) {
+      final candidate = _clueOrder[(index + step) % _clueOrder.length];
+      if (_firstEmptyCell(candidate) != null) {
+        _selectWord(candidate);
+        return;
+      }
+    }
+    _jumpToNextWord(current);
   }
 
   void _onTextChanged(String value) {
@@ -273,14 +459,13 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
       return;
     }
     if (value.isEmpty) {
-      // Backspace: clear the current cell if it has a letter, otherwise
-      // step back a cell (standard "backspace through the word" feel).
+      // Backspace: clear the current cell and step back one, so holding it
+      // walks back through the word erasing as it goes. On an already
+      // empty cell, step back and clear the one landed on.
       setState(() {
-        if (_filled[cell] != null) {
-          _filled.remove(cell);
-        } else {
-          _advance(backward: true);
-        }
+        final hadLetter = _filled.remove(cell) != null;
+        _advance(backward: true);
+        if (!hadLetter) _filled.remove(_selectedCell);
         _wrongCells.clear();
       });
     } else {
@@ -307,6 +492,7 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
     final puzzleId = _puzzleId;
     if (puzzleId == null) return;
     repository.saveProgress(puzzleId, Map.of(_filled));
+    _flushPlayTime();
     // Recorded as they play, not only at completion: a puzzle they solve most
     // of and then abandon still taught them those answers, and the cooldown
     // is meant to reflect what they know (PORTING_SPEC.md §6.2a). Most
@@ -380,9 +566,17 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
     if (_answers.isEmpty) return;
     final solved = _answers.entries.every((e) => _filled[e.key] == e.value);
     if (!solved) return;
-    setState(() => _completed = true);
+    _clock.stop();
     final puzzleId = _puzzleId;
-    if (puzzleId != null) ref.read(crosswordRepositoryProvider).markCompleted(puzzleId);
+    if (puzzleId != null) {
+      final repository = ref.read(crosswordRepositoryProvider);
+      // Finish the play record before flipping _completed: the record's
+      // writes are guarded on completed_at being null, and _flushPlayTime
+      // on _completed, so the order keeps the finishing time exact.
+      repository.completePlay(puzzleId, _activeMs, aided: _revealedAnswers.isNotEmpty);
+      repository.markCompleted(puzzleId);
+    }
+    setState(() => _completed = true);
   }
 
   /// Fills in cells the user hasn't worked out, and records that they were
@@ -392,7 +586,35 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
   /// `puzzle` everything. Every answer touching a filled-in cell is marked
   /// revealed — a partially revealed answer was still not discovered unaided,
   /// so it is not held back from later puzzles.
-  void _reveal(_RevealScope scope) {
+  /// Asks once, before the first reveal on a puzzle, whether to give up
+  /// the clean solve. Returns true when it's fine to go ahead — immediately
+  /// if the puzzle is already assisted or finished.
+  Future<bool> _confirmAssist(String action) async {
+    if (_revealedAnswers.isNotEmpty || _completed) return true;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('$action?'),
+        content: const Text(
+          'Revealing marks this puzzle as assisted: it won\'t count as a clean solve, '
+          'it\'s left out of your best times, and revealed answers aren\'t counted as learned.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Keep going')),
+          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: Text(action)),
+        ],
+      ),
+    );
+    return ok == true && mounted;
+  }
+
+  Future<void> _reveal(_RevealScope scope) async {
+    final label = switch (scope) {
+      _RevealScope.letter => 'Reveal letter',
+      _RevealScope.word => 'Reveal word',
+      _RevealScope.puzzle => 'Reveal puzzle',
+    };
+    if (!await _confirmAssist(label)) return;
     final targets = <(int, int)>[];
     switch (scope) {
       case _RevealScope.letter:
@@ -467,6 +689,10 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
       _reviewRequested = false;
       _completed = false;
       _selectedCell = null;
+      _bankedMs = 0;
+      _clock
+        ..stop()
+        ..reset();
     });
   }
 
@@ -474,18 +700,19 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen> {
   Widget build(BuildContext context) {
     final sessionAsync = ref.watch(crosswordSessionProvider(_sessionKey));
 
+    WidgetsBinding.instance.addPostFrameCallback((_) => _followSelection());
+
     return Scaffold(
-      // The grid's size is driven by screen width, not by whatever height
-      // is left after the keyboard opens — letting the Scaffold resize for
-      // the keyboard would squeeze that fixed-size content below the
-      // available height and overflow. The real input target is the
-      // invisible TextField, not something the user needs to see above the
-      // keyboard, so keeping the body full-height and letting the keyboard
-      // simply overlay the clue list is the correct fix, not a workaround.
+      // The keyboard overlays the body rather than shrinking it, so the
+      // board never changes size or gets cropped when typing starts. The
+      // part of the board the keys cover is worked out in _BoardViewport and
+      // the board is panned so the cell being typed into stays in view; the
+      // clue bar above it stays visible throughout. Dismiss the keyboard to
+      // get back to the clue list underneath.
       resizeToAvoidBottomInset: false,
       appBar: AppBar(
         title: Text(widget.puzzleId == null
-            ? '${widget.difficulty.label} Crossword'
+            ? widget.difficulty.label
             : '${widget.difficulty.label} · $_date'),
         actions: [
           if (sessionAsync.valueOrNull != null) _StudyPoolBadge(puzzle: sessionAsync.valueOrNull!.puzzle),
@@ -595,7 +822,10 @@ class _PuzzleBody extends StatelessWidget {
             color: Theme.of(context).colorScheme.primaryContainer,
             padding: const EdgeInsets.symmetric(vertical: 10),
             child: Text(
-              'Solved it! 🎉',
+              state._activeMs > 0
+                  ? 'Solved it in ${formatClock(Duration(milliseconds: state._activeMs))}'
+                      '${state._revealedAnswers.isEmpty ? ' 🎉' : ' — with some help'}'
+                  : 'Solved it! 🎉',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontWeight: FontWeight.w600,
@@ -605,9 +835,15 @@ class _PuzzleBody extends StatelessWidget {
           ),
         _ReviewStrip(state: state, puzzle: puzzle),
         if (activeWord != null) _ClueBar(state: state, word: activeWord),
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: _CrosswordGrid(state: state, puzzle: puzzle),
+        // The board and the clues share what's left, board first. A Mini
+        // never needs all of its share and gives the rest back; a Mega
+        // scrolls inside its share, following the cell being typed into.
+        Flexible(
+          flex: 11,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: _BoardViewport(state: state, puzzle: puzzle),
+          ),
         ),
         // Off-screen but focusable/visible-to-IME field that drives all
         // keyboard input for the selected cell — see _onTextChanged.
@@ -627,8 +863,81 @@ class _PuzzleBody extends StatelessWidget {
             ),
           ),
         ),
-        Expanded(child: _ClueLists(state: state, puzzle: puzzle)),
+        Flexible(flex: 9, child: _ClueLists(state: state, puzzle: puzzle)),
       ],
+    );
+  }
+}
+
+/// The grid as a board you look down on. Always the full width of the
+/// screen — the cells are sized from it, so there is never blank space
+/// either side — and shown through a viewport no taller than the space
+/// left, so a big puzzle, or any puzzle with the keyboard up, scrolls
+/// vertically. Pinch to zoom in, drag to pan; the selection is followed
+/// automatically (see `_followSelection`).
+class _BoardViewport extends StatelessWidget {
+  final _CrosswordScreenState state;
+  final CrosswordPuzzle puzzle;
+
+  const _BoardViewport({required this.state, required this.puzzle});
+
+  @override
+  Widget build(BuildContext context) {
+    // Read here so the keyboard's arrival rebuilds this widget: the body
+    // doesn't resize for it, so nothing else would.
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cell = constraints.maxWidth / puzzle.width;
+        final grid = Size(constraints.maxWidth, cell * puzzle.height);
+        final viewport = Size(constraints.maxWidth, min(constraints.maxHeight, grid.height));
+        // How much of the viewport the keyboard covers. The bottom edge is
+        // measured after the first layout and is stable, since the body
+        // never resizes; until it's known the keyboard is assumed to cover
+        // nothing, which is right for the first frame (no keyboard yet).
+        final bottom = state._viewportBottomOnScreen;
+        final hiddenBottom = bottom == null || keyboard == 0
+            ? 0.0
+            : (bottom - (screenHeight - keyboard)).clamp(0.0, viewport.height);
+        state._boardMetrics =
+            (cell: cell, grid: grid, viewport: viewport, hiddenBottom: hiddenBottom);
+        // Scheduled from here, not only from the screen's build: the
+        // keyboard's arrival changes these metrics without rebuilding the
+        // screen, and that is exactly when the cell being typed into needs
+        // bringing back into view.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final box = state._viewportKey.currentContext?.findRenderObject() as RenderBox?;
+          if (box != null && box.hasSize) {
+            final measured = box.localToGlobal(Offset(0, box.size.height)).dy;
+            if (state._viewportBottomOnScreen != measured) {
+              state._viewportBottomOnScreen = measured;
+              // The overlap depends on it; with the keyboard already up
+              // (opened before the first measurement landed) this is what
+              // makes the first follow use the right strip.
+              if (keyboard > 0) state._remeasured();
+            }
+          }
+          state._followSelection();
+        });
+        return SizedBox(
+          key: state._viewportKey,
+          width: viewport.width,
+          height: viewport.height,
+          child: InteractiveViewer(
+            transformationController: state._board,
+            // The grid is bigger than the viewport, not fitted into it.
+            constrained: false,
+            minScale: 1,
+            maxScale: 4,
+            // Let the board be dragged up by as much as the keyboard hides,
+            // so a pan doesn't snap the followed cell back under the keys.
+            boundaryMargin: EdgeInsets.only(bottom: hiddenBottom),
+            clipBehavior: Clip.hardEdge,
+            child: _CrosswordGrid(state: state, puzzle: puzzle, cellSize: cell),
+          ),
+        );
+      },
     );
   }
 }
@@ -675,8 +984,9 @@ class _ClueBar extends StatelessWidget {
 class _CrosswordGrid extends StatelessWidget {
   final _CrosswordScreenState state;
   final CrosswordPuzzle puzzle;
+  final double cellSize;
 
-  const _CrosswordGrid({required this.state, required this.puzzle});
+  const _CrosswordGrid({required this.state, required this.puzzle, required this.cellSize});
 
   @override
   Widget build(BuildContext context) {
@@ -686,36 +996,31 @@ class _CrosswordGrid extends StatelessWidget {
     }
     final activeWordCells = state._activeWord?.cells.map((c) => _cellKey(c.$1, c.$2)).toSet() ?? {};
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final cellSize = constraints.maxWidth / puzzle.width;
-        return SizedBox(
-          width: cellSize * puzzle.width,
-          height: cellSize * puzzle.height,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (var r = 0; r < puzzle.height; r++)
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (var c = 0; c < puzzle.width; c++)
-                      _Cell(
-                        size: cellSize,
-                        letter: state._answers.containsKey(_cellKey(r, c)) ? state._filled[_cellKey(r, c)] : null,
-                        number: numbers[_cellKey(r, c)],
-                        blocked: !state._answers.containsKey(_cellKey(r, c)),
-                        selected: state._selectedCell == _cellKey(r, c),
-                        inActiveWord: activeWordCells.contains(_cellKey(r, c)),
-                        wrong: state._wrongCells.contains(_cellKey(r, c)),
-                        onTap: () => state._selectCell(_cellKey(r, c)),
-                      ),
-                  ],
-                ),
-            ],
-          ),
-        );
-      },
+    return SizedBox(
+      width: cellSize * puzzle.width,
+      height: cellSize * puzzle.height,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var r = 0; r < puzzle.height; r++)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var c = 0; c < puzzle.width; c++)
+                  _Cell(
+                    size: cellSize,
+                    letter: state._answers.containsKey(_cellKey(r, c)) ? state._filled[_cellKey(r, c)] : null,
+                    number: numbers[_cellKey(r, c)],
+                    blocked: !state._answers.containsKey(_cellKey(r, c)),
+                    selected: state._selectedCell == _cellKey(r, c),
+                    inActiveWord: activeWordCells.contains(_cellKey(r, c)),
+                    wrong: state._wrongCells.contains(_cellKey(r, c)),
+                    onTap: () => state._selectCell(_cellKey(r, c)),
+                  ),
+              ],
+            ),
+        ],
+      ),
     );
   }
 }

@@ -42,19 +42,30 @@ class NotificationService {
     await _plugin.initialize(
       const InitializationSettings(
         android: AndroidInitializationSettings('ic_notification'),
+        // Permission is asked for explicitly in requestPermissions() so the
+        // iOS prompt appears at the same point in the flow as on Android.
+        iOS: DarwinInitializationSettings(
+          requestAlertPermission: false,
+          requestBadgePermission: false,
+          requestSoundPermission: false,
+        ),
       ),
     );
     _initialized = true;
   }
 
   /// Android 13+ notification permission and Android 12+ exact-alarm
-  /// permission. Safe to call repeatedly — the OS no-ops once granted.
+  /// permission, or the iOS alert/sound permission. Safe to call
+  /// repeatedly — the OS no-ops once granted.
   Future<void> requestPermissions() async {
     await _ensureInitialized();
     final android =
         _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     await android?.requestNotificationsPermission();
     await android?.requestExactAlarmsPermission();
+    final ios =
+        _plugin.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
+    await ios?.requestPermissions(alert: true, sound: true);
   }
 
   Future<void> cancelAll() async {
@@ -107,6 +118,7 @@ class NotificationService {
               icon: 'ic_notification',
               styleInformation: BigTextStyleInformation(word.notificationBody),
             ),
+            iOS: const DarwinNotificationDetails(),
           ),
           androidScheduleMode: scheduleMode,
           uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,

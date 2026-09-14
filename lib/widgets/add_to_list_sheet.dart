@@ -35,7 +35,9 @@ class _AddToListSheetState extends ConsumerState<_AddToListSheet> {
     final listsAsync = ref.watch(_listsForEntryProvider(widget.entryId));
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        // The keyboard inset keeps the "new list" field above the keys —
+        // a modal sheet doesn't move for the keyboard by itself.
+        padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.viewInsetsOf(context).bottom),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -60,6 +62,9 @@ class _AddToListSheetState extends ConsumerState<_AddToListSheet> {
                         children: [
                           for (final list in lists)
                             CheckboxListTile(
+                              secondary: Icon(
+                                list.kind == ListKind.folder ? Icons.folder_outlined : Icons.list_alt_outlined,
+                              ),
                               title: Text(list.name),
                               value: list.isMember,
                               onChanged: (_) async {

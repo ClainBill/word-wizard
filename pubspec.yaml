@@ -36,6 +36,11 @@ dependencies:
   flutter_local_notifications: ^18.0.1
   timezone: ^0.9.4
   flutter_timezone: ^5.1.0
+  html: ^0.15.7
+  flutter_secure_storage: ^11.1.0
+
+  # The progress screen's share card
+  share_plus: ^13.3.0
 
 dev_dependencies:
   flutter_test:
@@ -51,9 +56,13 @@ flutter:
   assets:
     - assets/db/
     - assets/crossword/
+    - assets/hunt/
 
 flutter_launcher_icons:
   android: true
+  ios: true
+  # App Store rejects icons with an alpha channel; flatten it for iOS only.
+  remove_alpha_ios: true
   image_path: "assets/icon/icon.png"
   adaptive_icon_background: "#8A5A22"
   adaptive_icon_foreground: "assets/icon/icon_foreground.png"

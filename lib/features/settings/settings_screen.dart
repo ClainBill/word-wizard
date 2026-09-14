@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
+import '../../services/api_key_store.dart';
+import 'api_key_sheet.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -11,6 +13,9 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final remindersAsync = ref.watch(remindersEnabledProvider);
     final reviewEnabledAsync = ref.watch(crosswordReviewEnabledProvider);
+    // Rebuilds when a key is saved or removed, so the AI switch below
+    // follows it.
+    final keyStore = ref.watch(apiKeyStoreProvider);
     final reviewConfigured = ref.watch(crosswordRepositoryProvider).reviewConfigured;
     final bannedCount = ref.watch(crosswordBannedAnswersProvider).valueOrNull?.length ?? 0;
 
@@ -71,15 +76,30 @@ class SettingsScreen extends ConsumerWidget {
           const Divider(),
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
-            child: Text('Developer', style: TextStyle(fontWeight: FontWeight.w600)),
+            child: Text('AI features', style: TextStyle(fontWeight: FontWeight.w600)),
+          ),
+          ListTile(
+            leading: const Icon(Icons.key_outlined),
+            title: const Text('OpenAI API key'),
+            subtitle: Text(
+              keyStore.hasKey
+                  ? 'Using your key (${ApiKeyStore.mask(keyStore.key!)}). Powers the '
+                      'crossword AI editor and the "guess from the clues" recall game.'
+                  : reviewConfigured
+                      ? 'Using the key from this debug build. Add your own to use '
+                          'the AI features in any build.'
+                      : 'Not set. Add your own OpenAI key to enable the crossword AI '
+                          'editor and the "guess from the clues" recall game.',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => showApiKeySheet(context),
           ),
           SwitchListTile(
             secondary: const Icon(Icons.auto_fix_high_outlined),
             title: const Text('Crossword AI editor'),
             subtitle: Text(
               !reviewConfigured
-                  ? 'No API key in this build. Run with '
-                      '--dart-define-from-file=.env to enable it.'
+                  ? 'Needs an API key — add one above.'
                   : 'One model call per new puzzle rewrites weak clues. Costs '
                       'tokens; turn it off to regenerate puzzles for free. '
                       'Per-puzzle cost is in each size\'s History screen.',
@@ -92,6 +112,11 @@ class SettingsScreen extends ConsumerWidget {
                 ? (value) =>
                     ref.read(settingsRepositoryProvider).setCrosswordReviewEnabled(value)
                 : null,
+          ),
+          const Divider(),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+            child: Text('Developer', style: TextStyle(fontWeight: FontWeight.w600)),
           ),
           ListTile(
             leading: const Icon(Icons.block_outlined),

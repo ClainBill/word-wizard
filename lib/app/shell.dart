@@ -4,6 +4,10 @@ import 'package:go_router/go_router.dart';
 
 import 'providers.dart';
 
+/// Position of the Reader branch in the router's shell — the one tab that
+/// wants to know when it's been switched to (to check the clipboard).
+const readerBranchIndex = 1;
+
 class AppShell extends ConsumerWidget {
   final StatefulNavigationShell navigationShell;
 
@@ -17,8 +21,10 @@ class AppShell extends ConsumerWidget {
       body: navigationShell,
       bottomNavigationBar: NavigationBar(
         selectedIndex: navigationShell.currentIndex,
-        onDestinationSelected: (i) =>
-            navigationShell.goBranch(i, initialLocation: i == navigationShell.currentIndex),
+        onDestinationSelected: (i) {
+          if (i == readerBranchIndex) ref.read(readerTabVisitsProvider.notifier).state++;
+          navigationShell.goBranch(i, initialLocation: i == navigationShell.currentIndex);
+        },
         destinations: [
           const NavigationDestination(icon: Icon(Icons.search), label: 'Search'),
           const NavigationDestination(icon: Icon(Icons.article_outlined), label: 'Reader'),

@@ -32,6 +32,35 @@ class SearchRepository {
   }) =>
       _db.randomGlosses(excludeEntryId: excludeEntryId, excludeGloss: excludeGloss, count: count);
 
+  /// Blanked example sentences belonging to other words — the wrong answers
+  /// in the study session's "which sentence is it?" comprehension game.
+  Future<List<String>> randomDistractorExamples(int excludeEntryId, {int count = 2}) =>
+      _db.randomBlankedExamples(excludeEntryId: excludeEntryId, count: count);
+
+  /// The same, but chosen to be about the same things as [example] — see
+  /// `DictionaryDatabase.similarBlankedExamples`. Topped up from the random
+  /// sample when the index has fewer than [count] usable neighbours, so the
+  /// game always has its choices.
+  Future<List<String>> similarDistractorExamples(
+    String example, {
+    required int excludeEntryId,
+    required String headword,
+    int count = 2,
+  }) async {
+    final similar = await _db.similarBlankedExamples(
+      example,
+      excludeEntryId: excludeEntryId,
+      excludeHeadword: headword,
+      count: count,
+    );
+    if (similar.length >= count) return similar;
+    final random = await _db.randomBlankedExamples(
+      excludeEntryId: excludeEntryId,
+      count: count - similar.length + 2,
+    );
+    return [...similar, ...random.where((r) => !similar.contains(r))].take(count).toList();
+  }
+
   /// A common real word ending in the same letters as [headword], for the
   /// study session's phonological "sounds like" recall cue. Null if nothing
   /// common enough shares a suffix.
@@ -44,11 +73,33 @@ class SearchRepository {
   Future<Map<int, List<String>>> crosswordClueOptions(Map<int, String> headwordsByEntryId) =>
       _db.crosswordClueOptions(headwordsByEntryId);
 
-  /// Falls back to inflection resolution when a direct headword search
-  /// comes back empty — lets a lookup of "ran" surface "run".
+  /// Search results with inflection resolution folded in, in the order a
+  /// reader wants them: the headword that is exactly the query, then the
+  /// lemmas the query is an inflection of ("ran" → "run", tagged with the
+  /// form so the row can say so), then the prefix matches.
+  ///
+  /// Used to fall back to forms only when the prefix search came back
+  /// empty, which for any short inflection it never did — "ran*" always
+  /// matches "range" — so "run" never appeared for "ran" at all.
   Future<List<EntrySummary>> searchOrResolve(String query) async {
-    final direct = await _db.search(query);
-    if (direct.isNotEmpty) return direct;
-    return _db.resolveForm(query);
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return const [];
+    final results = await _db.search(query);
+    final lemmas = await _db.resolveForm(trimmed);
+    if (lemmas.isEmpty) return results;
+
+    final lower = trimmed.toLowerCase();
+    final seen = <String>{};
+    final merged = <EntrySummary>[];
+    for (final r in results) {
+      if (r.headword.toLowerCase() == lower && seen.add(r.headword)) merged.add(r);
+    }
+    for (final l in lemmas) {
+      if (seen.add(l.headword)) merged.add(l.withMatchedForm(trimmed));
+    }
+    for (final r in results) {
+      if (seen.add(r.headword)) merged.add(r);
+    }
+    return merged;
   }
 }

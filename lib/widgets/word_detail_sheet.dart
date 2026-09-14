@@ -30,7 +30,14 @@ class _WordDetailSheet extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final wordAsync = ref.watch(_sheetWordProvider(headword));
 
-    return DraggableScrollableSheet(
+    // A modal sheet doesn't move for the keyboard on its own, so without
+    // this the keyboard simply covers the bottom of the sheet — which is
+    // where the notes field is, the one thing on the card you type into.
+    // Padding the sheet by the keyboard's height keeps the field above it,
+    // and the field then scrolls itself into view.
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: DraggableScrollableSheet(
       initialChildSize: 0.88,
       minChildSize: 0.4,
       maxChildSize: 0.95,
@@ -66,6 +73,7 @@ class _WordDetailSheet extends ConsumerWidget {
           ),
         );
       },
+      ),
     );
   }
 }

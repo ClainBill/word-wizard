@@ -73,3 +73,7 @@ tool/pipeline/out/dictionary-full.db
 # local settings file is per-machine.
 .claude/worktrees/
 .claude/settings.local.json
+
+# A 229 MB source snapshot dropped in the repo root — far over GitHub's
+# 100 MB file limit, and everything in it is already tracked here.
+/WordWizardSource.zip

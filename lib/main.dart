@@ -7,11 +7,16 @@ import 'app/theme.dart';
 import 'data/app_databases.dart';
 import 'data/repositories/settings_repository.dart';
 import 'data/repositories/study_repository.dart';
+import 'services/api_key_store.dart';
 import 'services/notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final databases = await AppDatabases.open();
+  // The user's own OpenAI key (if any) has to be in memory before the first
+  // frame so the services can check it synchronously; reading it from the
+  // keystore takes up to a second on a slow device, so it overlaps the
+  // database open rather than following it.
+  final (databases, _) = await (AppDatabases.open(), ApiKeyStore.instance.load()).wait;
   runApp(
     ProviderScope(
       overrides: [appDatabasesProvider.overrideWithValue(databases)],

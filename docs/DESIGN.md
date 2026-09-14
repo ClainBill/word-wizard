@@ -101,7 +101,7 @@ The app's shell: a five-tab bottom bar mirroring renzo's Dictionary / Lists / St
 | Tab | Purpose |
 |---|---|
 | 🔍 Search | Dictionary home — search bar + recents |
-| 📄 Reader | Paste text, tap any word to define |
+| 📄 Reader | Whatever you last copied, laid out as a page — every word tappable, list/study words colour-coded; keeps a history |
 | 🗂️ Lists | Custom lists + curated packs |
 | 🎯 Study | Due-today queue + progress dashboard |
 | ⚙️ Settings | Theme, backup, import, TTS voice |
@@ -129,14 +129,16 @@ A single Entry Detail card always renders its sections in this fixed order:
 |---|---|---|
 | Search | Type-ahead over the FTS index; deduplicated by headword; a trailing space forces an exact-token match | Tab bar |
 | Entry Detail | Full entry in fixed section order; add-to-list, add-to-study, TTS | Search, Reader, Lists, Study results |
-| Reader | Text box → tokenized word chips → tap a chip to define | Tab bar |
+| Reader | Pulls new clipboard text in on every visit (HTML flavour too, so headings/bold survive) and lays it out as a paper page; words in lists get that list's highlighter colour, studied words an underline, uncommon words a dotted one, with a legend strip that toggles each; tap → peek panel (senses, IPA, add-to-list/study/card), long-press → full card. History of every text shown; write/edit text by hand; reading options (text size, uncommon marking) | Tab bar |
+| Reader History | Every text the Reader has shown, newest-opened first; tap to reopen, swipe to remove, clear all | Reader |
 | Lists | Grid of custom lists + curated packs, each with a card count and due count | Tab bar, "Add to list" on any entry |
 | List Detail | Word table for one list; a ▶ Study action bulk-enrolls the whole list; a ⋮ menu resets/pauses/resumes/removes every studying word in it | Lists |
 | Study Session | One card at a time, front (word) → reveal (definition/example/note) → a small comprehension mini-exercise → four-button SM-2 grading; a ⋮ menu removes the current word from study without leaving the session | Study tab, List Detail |
-| Progress Dashboard | Cards due today, streak, mastered count, 14-day forecast | Study tab |
+| Progress Dashboard | Cards due today, streak, 14-day forecast, and a tappable progress bar at the top (mastered / reviewing / learning / in lists, proportional to word counts) | Study tab |
+| Progress screen | Every metric the app keeps, in units — no composite score; "words mastered" is the only headline. Study (reviews, time, mature-card retention, streak), games per difficulty (solved, clean, best, typical time), lookups (with repeat lookups offered for study), reading, a 12-week activity heatmap, and a text share card | Study tab → progress bar |
 | Manage Study Words | Every word in the SRS pool with stage badge, review count; Pause/Resume, Reset, Remove | Study tab |
 | Games → Crossword | Daily 5×5/9×9/17×17 crossword built to American/NYT convention (180° symmetry, min entry length 3, fully checked, connected), anchored on the SRS pool with a day-of-week theme; saves/resumes state; an app-bar chip counts how many of today's words came from the study pool. Generator ported from `PORTING_SPEC.md` | Games tab |
-| Settings | Theme, TTS voice/rate, notification time, backup/export, import, data source attribution | Tab bar |
+| Settings | Theme, TTS voice/rate, notification time, backup/export, import, data source attribution; **OpenAI API key** (user's own, kept in the platform keystore, checked against OpenAI before saving) which enables the crossword AI editor and the feature-clues recall game | Tab bar |
 
 ---
 
@@ -151,6 +153,7 @@ Two databases: a read-only dictionary shipped as an asset, and a small read-writ
 | `entries` | id, headword, pos, frequency_rank, etymology | One row per lemma+POS pair; rows sharing a headword are merged into a single card at query time |
 | `senses` | id, entry_id, gloss, order | 1:N — a word can have several definitions |
 | `examples` | id, sense_id, text, source | From Wiktionary quotations/usage lines |
+| `examples_fts` | text (FTS5 over `examples`, porter-stemmed) | Topic index over the sentences: the study session's "which sentence wants this word?" game ranks distractors by shared content words so they can't be told apart on subject alone. Optional — an older `dictionary.db` without it falls back to random sentences |
 | `pronunciations` | entry_id, ipa, audio_hint | `audio_hint` feeds device TTS phonemes, not a stored audio file |
 | `forms` | form_text, entry_id, form_type | Inflections — powers conjugation search and inflected-word tap-through |
 | `morphemes` / `morpheme_entries` | — | Curated root/prefix/suffix reference (v2) |
@@ -160,13 +163,18 @@ Two databases: a read-only dictionary shipped as an asset, and a small read-writ
 
 | Table | Key fields | Notes |
 |---|---|---|
-| `lists` | id, name, kind, created_at | `kind`: custom \| curated |
+| `lists` | id, name, kind, parent_id, created_at | `kind`: custom \| curated \| folder. `parent_id` self-references `lists.id` (null = top-level) — a folder is just a `lists` row other rows can nest under, arbitrarily deep |
 | `list_items` | list_id, entry_id, note, added_at | Also stores the user's free-text note per word |
-| `study_cards` | entry_id, state, ease_factor, interval_days, repetitions, due_at, paused | One SRS record per entry; `paused` excludes a card from due/dashboard/forecast/reminders without discarding progress |
+| `study_cards` | entry_id, **direction**, state, ease_factor, interval_days, repetitions, due_at, paused | One SRS record per **(entry, direction)** — `direction` is `w2m` (see the word, recall the meaning) or `m2w` (see the meaning, produce the word), and a word studied both ways holds two independently-scheduled rows. `paused` excludes a card from due/dashboard/forecast/reminders without discarding progress; a direction the user has switched off is excluded the same way, and keeps its history |
+| `study_senses` | entry_id, sense_id, excluded | The user's decisions about a word's meanings. A row with `excluded = 0` is a **pin** (the card shows exactly the pinned senses); `excluded = 1` keeps that sense off the random draw. Set from the entry screen: hold a meaning to pin (✓), keep holding through a second haptic to exclude (⊘) |
 | `entry_notes` | entry_id, markdown, updated_at | Rendered on Entry Detail and mirrored onto the SRS review-card back |
-| `review_log` | card_id, reviewed_at, grade, prior_interval | Append-only history |
+| `review_log` | card_id, reviewed_at, grade, prior_interval, duration_ms | Append-only history. `duration_ms` is how long the card was on screen, capped at 2 min; 0 for reviews credited outside a session (a crossword solve) |
 | `settings` | key, value | Theme, TTS voice, reminder time |
-| `crossword_puzzles` | puzzle_date, difficulty, grid_json, progress_json, completed | One row per day+difficulty; `progress_json` is the in-progress fill, updated on every keystroke |
+| `reader_documents` | title, source, blocks_json, preview, content_hash, word_count, created_at, opened_at, open_seq | The Reader's history. `blocks_json` is the text as headings/paragraphs/quotes/list items with bold/italic/underline runs (`ReaderBlock`); `content_hash` dedupes a re-copy; `open_seq` orders "most recently opened" exactly (DateTimes are stored to the second) |
+| `crossword_puzzles` | puzzle_date, difficulty, grid_json, progress_json, completed | One row per generation (a day can hold several — "Start new" adds one); `progress_json` is the in-progress fill, updated on every keystroke |
+| `game_results` | game, difficulty, ref_id, started_at, completed_at, active_ms, aided | One row per play of a Games-tab game (`crossword` for now; later games write the same shape). `active_ms` is foreground time only, flushed as they play; `completed_at` null = abandoned; `aided` = any cell revealed, which keeps the time out of personal bests |
+| `search_log` | query, searched_at | The Search tab's recent-searches list. One row per distinct query, re-inserted on repeat so id order is recency. Not a progress metric |
+| `lookup_log` | entry_id, headword, source, looked_up_at | Words looked up: searched for on the Search tab **and opened**. Nothing else writes here — opening a word from a list/reader/crossword is browsing. Append-only, so repeat lookups are visible (the progress screen offers to add those to study) |
 
 ---
 
@@ -291,7 +299,7 @@ A one-time, offline script that turns a raw Wiktionary extract into the bundled 
 | 0 · Pipeline | Build and run the ETL script; produce `dictionary-core.db` | Can query 15k words by headword prefix from the command line |
 | 1 · MVP | Search, Entry Detail, TTS, custom Lists with bulk ▶ Study, Study session with SM-2 | Look up a word, save it, add a note, bulk-enroll a list, review tomorrow with a correct due date |
 | 2 · Study depth | Progress dashboard; full 740k-entry dictionary bundled directly | **Done** — dashboard matches ground truth, search resolves the full Wiktionary extract |
-| 3 · Reading | Reader tab, tokenizer, inflection index, conjugation search | Paste a paragraph, tap any inflected word, get the right lemma |
+| 3 · Reading | Reader tab, tokenizer, inflection index, conjugation search | **Done 2026-09-11** — copy a paragraph anywhere, open the tab, tap any inflected word, get the right lemma; list words lit up in their list's colour |
 | 4 · Polish | Curated list packs, dark mode, backup/export, tablet layout, Anki import, reminders | Feature-complete against the Feature map's v1/v2 rows |
 
 ---
@@ -308,11 +316,11 @@ Every idea raised after the MVP shipped, in the order they were raised, with wha
 | 2 | Crossword clues should favor real, commonly-used words — cut initialisms, drop forced symmetry | ✅ done | — | Superseded by the `PORTING_SPEC.md` port: fill comes from a scored word list restricted to recognizable vocabulary, so any valid fill is a publishable one. Initialisms are scored down and filtered out of the short-entry pool. Symmetry is now *kept* deliberately — it is what makes the grids fillable (spec §10.1), not decoration. |
 | 3 | Show a counter of how many crossword words came from the SRS pool, in the corner | ✅ done | Quick | **Shipped 2026-09-06.** Puzzle words carry a persisted `fromStudyPool` flag; an app-bar chip shows the count. |
 | 4 | Search: a trailing space should cut a word off for an exact match ("muse " excludes "museum") | ✅ done | — | Found already built during the audit, just unchecked in the source notes. |
-| 5 | Group lists into folders — folders behave like lists but can also nest other lists and words | ⬜ open | Large | Needs a real hierarchy in the data model (self-referential `lists`, or a parent `list_id` column), plus recursive study/pause propagation and new UI for nested browsing. |
+| 5 | Group lists into folders — folders behave like lists but can also nest other lists and words | ✅ done | Large | **Shipped 2026-09-11.** A folder is just a `lists` row (`kind = 'folder'`) that other `lists` rows nest under via a new self-referential `parent_id` (schema v10) — nesting is arbitrarily deep, and a folder holds words directly the same way a plain list does, since `list_items` doesn't care about the owning row's kind. Every existing per-list action (▶ Study, reset/pause/resume/remove, due queue) now resolves its target through a `WITH RECURSIVE` subtree query (`lib/data/repositories/list_hierarchy.dart`) instead of a single `list_id = ?` filter, so they work on folders — recursively, across nested lists — with no branching in the UI or call sites; a plain list's subtree is just itself, so its behavior is unchanged. Lists screen and List Detail both gained "New folder", move-to-folder, and delete (list-level delete didn't exist in the UI before this). |
 | 6 | Crossword should save its state on quit and resume later | ✅ done | — | Found already built during the audit — every keystroke persists progress against that day's puzzle row. |
-| 7 | SRS review options: quiz from the meaning instead of the word (either direction, or both) | ⬜ open | Medium | A settings toggle plus flipping which side of the card shows first; the comprehension mini-exercises (#9) would need a meaning→word variant too. |
+| 7 | SRS review options: quiz from the meaning instead of the word (either direction, or both) | ✅ done | Medium | **Shipped 2026-09-10.** Not a toggle over one card but a second card: `study_cards` gained a `direction` column and a composite `UNIQUE(entry_id, direction)` (schema v9), so each direction carries its own ease/interval/due date/review log — receptive and productive knowledge of a word are different memories that decay at different rates. The picker lives in a study-options sheet reachable from the session's progress bar. Switching a direction off never deletes its cards; switching "both ways" on backfills reverse cards that inherit their sibling's due date rather than all becoming due today; a word's two cards are spaced apart in the queue so the second isn't answered off the first's short-term memory. |
 | 8 | Crossword text input should skip over cells that already have a letter in them | ✅ done | Quick | **Shipped 2026-09-06.** Typing through a word skips cells a crossing word already filled, jumping to the next word once nothing's left empty. |
-| 9 | SRS comprehension mini-exercises under the flipped card (sentence/synonym/definition matching, spelling, etc.) | 🟡 partial | Medium (remaining) | Definition-match and letter-spelling are live and randomly picked. Still open: synonym-matching and example-sentence-matching. |
+| 9 | SRS comprehension mini-exercises under the flipped card (sentence/synonym/definition matching, spelling, etc.) | ✅ done | Medium | **Rebuilt 2026-09-10.** The earlier set all tested producing *the word*, which on a word→meaning card is a spelling test rather than a memory jog — the missing half was the meaning. Games are now keyed to a `RecallTarget`: the pre-reveal jog exercises the side you were asked for, the post-reveal panel exercises the other, so every review touches both halves once. Eight visual games (`lib/features/study/recall_games.dart`): Crack the word, Fill the gap, Sound it out, Unscramble it, Guess from the clues, Which meaning is it?, Where does it belong?, Rebuild the meaning. Example-sentence matching ("Where does it belong?") closes the last open item here. |
 | 10 | From the full card during SRS, tap a word in the description/example to add it to a list — without leaving SRS | ✅ done | Medium | **Shipped 2026-09-06** — via the tappable-word feature (#15): tapping a word pops its own card up as a stacked sheet, with its own Add-to-list/Study buttons, on top of the study session. |
 | 11 | Remove a word from SRS without leaving the session (via an ⋮ menu) | ✅ done | Quick | **Shipped 2026-09-06.** The repository-level remove already existed (Manage Study Words); this wires a confirm-and-remove menu into the study session card itself. |
 | 12 | A Games tab with an intelligent daily Crossword/Strands-style game built from SRS words — prefer no cloud API | 🟡 partial | Large (remaining) | Games tab + daily Crossword exist; the generator was rebuilt from `PORTING_SPEC.md` (offline, deterministic per day, CSP fill over a scored word list, SRS words as anchors). A Strands-style word-search mode is unbuilt. |
@@ -325,6 +333,8 @@ Every idea raised after the MVP shipped, in the order they were raised, with wha
 | 19 | Rehaul the app's look, feel, and logo — grainy, papery, analogue "old dictionary" aesthetic | ⬜ open | Large | The current theme already leans warm-paper in color only; an actual grain/paper texture treatment is a real visual-design pass. |
 | 20 | Colour theme customization in Settings | ⬜ open | Medium | The theme is already seed-color-driven (`ColorScheme.fromSeed`); needs a stored seed-color setting and a picker UI, not a redesign. |
 | 21 | A "question" feature on the SRS card back — ask something about the word and get an answer | ⬜ open | Large | Implies an answering engine (an LLM call), a real scope decision against the offline-only stance — or else it's "just" a stored Q&A note with no automatic answer. |
+| 24 | Enter my own OpenAI API key in the app | ✅ done | Small | **Shipped 2026-09-11.** Settings → AI features. `ApiKeyStore` (flutter_secure_storage) with a Check/Save/Remove sheet; services prefer proxy → user key → debug define. See APP_INTEGRATION.md §4 for why a user's own key is allowed where a bundled one is not. |
+| 23 | Text clipboard analyser tab, with history | ✅ done | Large | **Shipped 2026-09-11** as the Reader tab (`lib/features/reader/`, `ReaderRepository`, `ClipboardService`, schema v11). Auto-pulls new clipboard text (3+ words) on every tab visit / app resume, resolving each word to its canonical entry in two batched lookups (`analyze`); marks are a live layer over that (`watchMarks`) so adding to a list from the page lights the word up at once. Android hands over the clipboard's HTML flavour through a small method channel, and checks the clip *timestamp* before reading content — Android 12+ toasts on every content read. Page look: paper sheet, serif, dateline, headings/quotes/lists, per-list highlighter colours, studying underline, uncommon dotted underline, legend chips that toggle each. Open: share-sheet intake, in-page text selection. |
 | 22 | *Other idea:* a separate app that turns a Google search into a flashcard | 💡 idea | — | Explicitly a different product concept, not a Word Wizard feature — noted for the record, not sized or scheduled. |
 
 ---
@@ -335,7 +345,7 @@ Every idea raised after the MVP shipped, in the order they were raised, with wha
 
 - Frequency source for ranking — SUBTLEX-US vs. Google Books Ngrams vs. a GRE/SAT-specific list; affects which ~15k words land in the bundled core set.
 - Whether "Hard" needs its own interval formula or can reuse Anki's simpler `interval × 1.2` approximation used above.
-- Whether the Reader tokenizer needs real lemmatization or whether the `forms` table lookup is sufficient — likely sufficient, since Kaikki's form data already covers irregular inflections.
+- ~~Whether the Reader tokenizer needs real lemmatization or whether the `forms` table lookup is sufficient~~ — resolved 2026-09-11: the `forms` lookup is sufficient (with a possessive strip and a hyphen-split fallback on top); the one wrinkle is words that are both a headword and a form ("running"), which the Reader handles by carrying the lemma alongside and preferring whichever is in a list.
 
 ### Sources
 

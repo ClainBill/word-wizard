@@ -11,6 +11,8 @@ import '../../domain/crossword/crossword_models.dart';
 import '../../domain/crossword/editorial.dart';
 import '../../domain/crossword/generator.dart';
 import '../../domain/crossword/history.dart';
+import '../../domain/models/study_card.dart';
+import '../../domain/models/study_direction.dart';
 import '../../domain/srs/sm2.dart';
 import '../../services/crossword_review_service.dart';
 import '../user/user_database.dart';
@@ -31,6 +33,26 @@ typedef CrosswordSession = ({
   Map<String, String> progress,
   bool completed,
   Set<String> revealed,
+
+  /// Active solving time already banked against this puzzle in earlier
+  /// sittings, which the screen's timer resumes from.
+  int activeMs,
+});
+
+/// How far one puzzle got, for history and the progress screen.
+typedef CrosswordPlayState = ({
+  /// Correctly filled white cells over all white cells, 0..1.
+  double filledRatio,
+  int solvedWords,
+  int totalWords,
+  bool completed,
+
+  /// Any cell revealed rather than worked out.
+  bool aided,
+
+  /// Null when no play was recorded — puzzles from before timing existed,
+  /// or never opened.
+  int? activeMs,
 });
 
 /// One generated puzzle in a difficulty's history, with what the editorial
@@ -40,6 +62,7 @@ typedef CrosswordHistoryEntry = ({
   String date,
   DateTime generatedAt,
   bool completed,
+  CrosswordPlayState play,
 
   /// True when an earlier puzzle exists for the same day — i.e. this one came
   /// from "Start new".
@@ -180,6 +203,7 @@ class CrosswordRepository {
     final event = await (_db.select(_db.crosswordSolveEvents)
           ..where((t) => t.puzzleId.equals(row.id)))
         .getSingleOrNull();
+    final play = await _playRow(row.id);
     return (
       id: row.id,
       date: row.puzzleDate,
@@ -187,6 +211,106 @@ class CrosswordRepository {
       progress: Map<String, String>.from(jsonDecode(row.progressJson) as Map),
       completed: row.completed,
       revealed: event == null ? const <String>{} : _decodeAnswers(event.revealedJson),
+      activeMs: play?.activeMs ?? 0,
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // Play records (game_results): when a puzzle was started, how long it has
+  // actively been worked on, and whether it was finished clean.
+  // -------------------------------------------------------------------
+
+  static const _game = 'crossword';
+
+  Future<GameResultRow?> _playRow(int puzzleId) =>
+      (_db.select(_db.gameResults)
+            ..where((t) => t.game.equals(_game) & t.refId.equals(puzzleId)))
+          .getSingleOrNull();
+
+  /// Marks a puzzle as started, if it wasn't already. Called when the grid
+  /// is first shown — the clock starts when the clues do, not on the first
+  /// keystroke.
+  Future<void> startPlay(int puzzleId, CrosswordDifficulty difficulty) async {
+    await _db.into(_db.gameResults).insert(
+          GameResultsCompanion.insert(
+            game: _game,
+            difficulty: Value(difficulty.storageKey),
+            refId: puzzleId,
+          ),
+          mode: InsertMode.insertOrIgnore,
+        );
+  }
+
+  /// Banks the active time so far. Written on every keystroke and on
+  /// leaving, so a killed app loses at most one keystroke's worth. A puzzle
+  /// already completed keeps its finishing time: nothing after that is
+  /// solving.
+  Future<void> recordPlayTime(int puzzleId, int activeMs, {required bool aided}) async {
+    await (_db.update(_db.gameResults)
+          ..where((t) =>
+              t.game.equals(_game) & t.refId.equals(puzzleId) & t.completedAt.isNull()))
+        .write(GameResultsCompanion(activeMs: Value(activeMs), aided: Value(aided)));
+  }
+
+  Future<void> completePlay(int puzzleId, int activeMs, {required bool aided}) async {
+    await (_db.update(_db.gameResults)
+          ..where((t) =>
+              t.game.equals(_game) & t.refId.equals(puzzleId) & t.completedAt.isNull()))
+        .write(GameResultsCompanion(
+          activeMs: Value(activeMs),
+          aided: Value(aided),
+          completedAt: Value(DateTime.now()),
+        ));
+  }
+
+  /// Compares the saved fill against the grid: how many cells and answers
+  /// are right so far. The saved progress is the truth here rather than the
+  /// solve-event row, because the event only records *whole* answers and a
+  /// half-finished grid is exactly what history wants to show.
+  CrosswordPlayState _playState(
+    CrosswordPuzzleRow row,
+    CrosswordSolveEventRow? event,
+    GameResultRow? play,
+  ) {
+    var whiteCells = 0;
+    var correctCells = 0;
+    var solvedWords = 0;
+    var totalWords = 0;
+    try {
+      final puzzle = CrosswordPuzzle.fromJson(jsonDecode(row.gridJson) as Map<String, dynamic>);
+      final filled = Map<String, String>.from(jsonDecode(row.progressJson) as Map);
+      final answers = <String, String>{};
+      for (final word in puzzle.words) {
+        final cells = word.cells;
+        var complete = true;
+        for (var i = 0; i < cells.length; i++) {
+          final key = '${cells[i].$1},${cells[i].$2}';
+          answers[key] = word.answer[i];
+          if (filled[key] != word.answer[i]) complete = false;
+        }
+        totalWords++;
+        if (complete) solvedWords++;
+      }
+      whiteCells = answers.length;
+      for (final entry in answers.entries) {
+        if (filled[entry.key] == entry.value) correctCells++;
+      }
+    } catch (_) {
+      // A row that won't decode still gets a history line; it just can't
+      // say how far it got.
+    }
+    final revealed = event == null ? const <String>{} : _decodeAnswers(event.revealedJson);
+    return (
+      filledRatio: row.completed
+          ? 1.0
+          : whiteCells == 0
+              ? 0.0
+              : correctCells / whiteCells,
+      solvedWords: row.completed ? totalWords : solvedWords,
+      totalWords: totalWords,
+      completed: row.completed,
+      aided: (play?.aided ?? false) || revealed.isNotEmpty,
+      activeMs: play?.activeMs,
     );
   }
 
@@ -235,6 +359,7 @@ class CrosswordRepository {
       progress: const <String, String>{},
       completed: false,
       revealed: const <String>{},
+      activeMs: 0,
     );
   }
 
@@ -282,6 +407,20 @@ class CrosswordRepository {
       runsByDate.putIfAbsent(run.date, () => []).add(run);
     }
 
+    final ids = [for (final row in rows) row.id];
+    final eventsByPuzzle = {
+      for (final e in await (_db.select(_db.crosswordSolveEvents)
+            ..where((t) => t.puzzleId.isIn(ids)))
+          .get())
+        e.puzzleId: e,
+    };
+    final playsByPuzzle = {
+      for (final p in await (_db.select(_db.gameResults)
+            ..where((t) => t.game.equals(_game) & t.refId.isIn(ids)))
+          .get())
+        p.refId: p,
+    };
+
     // Oldest generation for a day is the original; anything after it came
     // from "Start new".
     final earliestForDate = <String, int>{};
@@ -297,6 +436,7 @@ class CrosswordRepository {
           date: row.puzzleDate,
           generatedAt: row.createdAt,
           completed: row.completed,
+          play: _playState(row, eventsByPuzzle[row.id], playsByPuzzle[row.id]),
           isRegeneration: earliestForDate[row.puzzleDate] != row.id,
           // Runs logged before puzzles had ids fall back to their day, so old
           // history doesn't lose its costs.
@@ -384,16 +524,28 @@ class CrosswordRepository {
   /// that word, which is exactly what the schedule wants to know
   /// (APP_INTEGRATION.md §3). Graded [Grade.good] rather than `easy`: they
   /// had the crossings to help.
+  ///
+  /// It credits the **meaning → word** card when the word has one, because
+  /// that is literally what solving a crossword clue is: a definition was
+  /// given and the word was produced from it. Only if the word isn't studied
+  /// that way does the credit fall back to its word → meaning card. Crediting
+  /// both would count one retrieval as evidence for two different memories.
   Future<void> creditStudyWords(Iterable<int> entryIds) async {
     if (entryIds.isEmpty) return;
     final cards = await _studyRepository.allStudyingCards(limit: 500);
     final wanted = entryIds.toSet();
+    final byEntry = <int, StudyCard>{};
     for (final card in cards) {
       if (!wanted.contains(card.entryId)) continue;
       // Only credit a card that is actually due; grading one that isn't
       // would push its interval out on a review the schedule never asked
       // for.
       if (card.dueAt.isAfter(DateTime.now())) continue;
+      final existing = byEntry[card.entryId];
+      if (existing != null && existing.direction == StudyDirection.meaningToWord) continue;
+      byEntry[card.entryId] = card;
+    }
+    for (final card in byEntry.values) {
       await _studyRepository.grade(card, Grade.good);
     }
   }
@@ -406,7 +558,15 @@ class CrosswordRepository {
     String date, {
     int? seed,
   }) async {
-    final due = await _studyRepository.dueQueue(limit: 200);
+    // Every direction, not just the ones being reviewed right now: the
+    // puzzle wants *words the user is learning*, and a word is no less worth
+    // seeing in a grid because its reverse card happens to be the one that's
+    // due. Duplicates a both-ways word produces are collapsed by
+    // `seenEntryIds` below.
+    final due = await _studyRepository.dueQueue(
+      directions: StudyDirection.values.toSet(),
+      limit: 200,
+    );
     final all = await _studyRepository.allStudyingCards(limit: 200);
 
     // Due cards first, then the rest of the study pool. Only `maxAnchors` of

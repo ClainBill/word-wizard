@@ -6,18 +6,25 @@ import '../features/games/crossword_banned_answers_screen.dart';
 import '../features/games/crossword_history_screen.dart';
 import '../features/games/crossword_screen.dart';
 import '../features/games/games_screen.dart';
+import '../features/games/hunt_history_screen.dart';
+import '../features/games/hunt_screen.dart';
 import '../features/lists/list_detail_screen.dart';
 import '../features/lists/lists_screen.dart';
+import '../features/reader/reader_edit_screen.dart';
+import '../features/reader/reader_history_screen.dart';
 import '../features/reader/reader_screen.dart';
 import '../features/search/search_screen.dart';
 import '../features/settings/settings_screen.dart';
+import '../features/progress/progress_screen.dart';
 import '../features/study/manage_study_screen.dart';
 import '../features/study/study_screen.dart';
 import '../features/study/study_session_screen.dart';
 import 'shell.dart';
 
 final appRouter = GoRouter(
-  initialLocation: '/search',
+  // `--dart-define=INITIAL_ROUTE=/games/hunt` opens straight onto a screen,
+  // for testing on a device without tapping through.
+  initialLocation: const String.fromEnvironment('INITIAL_ROUTE', defaultValue: '/search'),
   routes: [
     // Entry Detail is reachable from every tab, so it's pushed on the root
     // navigator rather than nested inside a single shell branch.
@@ -25,6 +32,7 @@ final appRouter = GoRouter(
       path: '/entry/:headword',
       builder: (context, state) => EntryDetailScreen(
         headword: Uri.decodeComponent(state.pathParameters['headword']!),
+        fromSearch: state.uri.queryParameters['from'] == 'search',
       ),
     ),
     GoRoute(
@@ -37,6 +45,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/study/manage',
       builder: (context, state) => const ManageStudyScreen(),
+    ),
+    GoRoute(
+      path: '/study/progress',
+      builder: (context, state) => const ProgressScreen(),
     ),
     GoRoute(
       path: '/games/crossword/:difficulty',
@@ -54,6 +66,16 @@ final appRouter = GoRouter(
       builder: (context, state) => const CrosswordBannedAnswersScreen(),
     ),
     GoRoute(
+      path: '/games/hunt',
+      builder: (context, state) => HuntScreen(
+        puzzleId: int.tryParse(state.uri.queryParameters['puzzle'] ?? ''),
+      ),
+    ),
+    GoRoute(
+      path: '/games/hunt/history',
+      builder: (context, state) => const HuntHistoryScreen(),
+    ),
+    GoRoute(
       path: '/games/crossword/:difficulty/history',
       builder: (context, state) => CrosswordHistoryScreen(
         difficulty: CrosswordDifficulty.fromStorageKey(state.pathParameters['difficulty']!),
@@ -66,7 +88,24 @@ final appRouter = GoRouter(
           GoRoute(path: '/search', builder: (context, state) => const SearchScreen()),
         ]),
         StatefulShellBranch(routes: [
-          GoRoute(path: '/reader', builder: (context, state) => const ReaderScreen()),
+          GoRoute(
+            path: '/reader',
+            builder: (context, state) => const ReaderScreen(),
+            routes: [
+              GoRoute(
+                path: 'history',
+                builder: (context, state) => const ReaderHistoryScreen(),
+              ),
+              // Type or paste text by hand; `doc` edits an existing document's
+              // text in place instead of creating a new one.
+              GoRoute(
+                path: 'edit',
+                builder: (context, state) => ReaderEditScreen(
+                  documentId: int.tryParse(state.uri.queryParameters['doc'] ?? ''),
+                ),
+              ),
+            ],
+          ),
         ]),
         StatefulShellBranch(routes: [
           GoRoute(

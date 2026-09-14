@@ -182,6 +182,13 @@ class DictionaryDatabase extends _$DictionaryDatabase {
   /// ranks best, since a lookup should feel like one word with several
   /// meanings rather than three near-duplicate rows. `loadWord` fills in
   /// the rest once the user taps in.
+  ///
+  /// Ordered in three tiers before frequency ever comes into it: the
+  /// headword that *is* the query, then headwords that start with it, then
+  /// everything else the index matched (multi-word headwords whose later
+  /// word starts with it — "house museum" for "muse"). Frequency alone put
+  /// "museum" and ten compounds above "muse" itself, which is the one row
+  /// someone typing "muse" is nearly always after.
   Future<List<EntrySummary>> search(String query, {int limit = 30}) async {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return const [];
@@ -192,12 +199,21 @@ class DictionaryDatabase extends _$DictionaryDatabase {
     final exact = query.endsWith(' ');
     final sanitized = trimmed.replaceAll('"', ' ');
     final ftsQuery = exact ? sanitized : '$sanitized*';
+    // LIKE is case-insensitive for ASCII, which is what makes "muse" and
+    // "Muse" both land in the first tier. `_` and `%` are wildcards in a
+    // LIKE pattern, so they're escaped in case someone types one.
+    final likePrefix = '${trimmed.replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_')}%';
     final rows = await customSelect(
       '''
       SELECT m.id, m.headword, m.pos,
              (SELECT gloss FROM senses WHERE entry_id = m.id ORDER BY sense_order LIMIT 1) AS gloss
       FROM (
         SELECT e.id, e.headword, e.pos, e.frequency_rank,
+               CASE
+                 WHEN e.headword = ? COLLATE NOCASE THEN 0
+                 WHEN e.headword LIKE ? ESCAPE '\\' THEN 1
+                 ELSE 2
+               END AS tier,
                ROW_NUMBER() OVER (
                  PARTITION BY e.headword
                  ORDER BY (e.frequency_rank IS NULL), e.frequency_rank
@@ -207,24 +223,28 @@ class DictionaryDatabase extends _$DictionaryDatabase {
         WHERE entries_fts MATCH ?
       ) m
       WHERE m.rn = 1
-      ORDER BY (m.frequency_rank IS NULL), m.frequency_rank ASC
+      ORDER BY m.tier, (m.frequency_rank IS NULL), m.frequency_rank ASC
       LIMIT ?
       ''',
-      variables: [Variable.withString(ftsQuery), Variable.withInt(limit)],
+      variables: [
+        Variable.withString(trimmed),
+        Variable.withString(likePrefix),
+        Variable.withString(ftsQuery),
+        Variable.withInt(limit),
+      ],
     ).get();
-    return rows
-        .map((r) => EntrySummary(
-              id: r.read<int>('id'),
-              headword: r.read<String>('headword'),
-              pos: r.read<String>('pos'),
-              gloss: r.readNullable<String>('gloss'),
-            ))
-        .toList();
+    return rows.map(_summaryFromRow).toList();
   }
 
   /// Resolves an inflected surface form ("ran") back to its lemma, deduped
   /// by headword the same way [search] is.
+  ///
+  /// Looks the form up as typed and lower-cased rather than with `COLLATE
+  /// NOCASE`: a collation the index wasn't built with makes SQLite scan all
+  /// 800k+ form rows, and this runs on every search keystroke.
   Future<List<EntrySummary>> resolveForm(String surfaceForm) async {
+    final trimmed = surfaceForm.trim();
+    if (trimmed.isEmpty) return const [];
     final rows = await customSelect(
       '''
       SELECT m.id, m.headword, m.pos,
@@ -237,22 +257,22 @@ class DictionaryDatabase extends _$DictionaryDatabase {
                ) AS rn
         FROM forms fm
         JOIN entries e ON e.id = fm.entry_id
-        WHERE fm.form_text = ? COLLATE NOCASE
+        WHERE fm.form_text IN (?, ?)
       ) m
       WHERE m.rn = 1
       ORDER BY (m.frequency_rank IS NULL), m.frequency_rank ASC
       ''',
-      variables: [Variable.withString(surfaceForm.trim())],
+      variables: [Variable.withString(trimmed), Variable.withString(trimmed.toLowerCase())],
     ).get();
-    return rows
-        .map((r) => EntrySummary(
-              id: r.read<int>('id'),
-              headword: r.read<String>('headword'),
-              pos: r.read<String>('pos'),
-              gloss: r.readNullable<String>('gloss'),
-            ))
-        .toList();
+    return rows.map(_summaryFromRow).toList();
   }
+
+  static EntrySummary _summaryFromRow(QueryRow r) => EntrySummary(
+        id: r.read<int>('id'),
+        headword: r.read<String>('headword'),
+        pos: r.read<String>('pos'),
+        gloss: r.readNullable<String>('gloss'),
+      );
 
   /// A best-effort "sounds like" cue for the study session's rhyme/sound
   /// recall game — another common headword ending in the same 2-3 letters
@@ -353,6 +373,156 @@ class DictionaryDatabase extends _$DictionaryDatabase {
       if (gloss.length < 6 || gloss.length > 70) continue;
       if (!seen.add(gloss)) continue;
       result.add(gloss);
+    }
+    return result;
+  }
+
+  /// Example sentences belonging to *other* words, with their own headword
+  /// blanked out — the wrong answers in the study session's "which sentence
+  /// is it?" game, where a blanked sentence that genuinely belongs to some
+  /// other word is a far better distractor than an invented one.
+  ///
+  /// Same random-rowid sampling trick as [randomGlosses], and for the same
+  /// reason: `ORDER BY RANDOM()` over the examples table is a full-table
+  /// sort, measured in seconds. Oversampled hard here because most candidate
+  /// rows get thrown away — a usable one has to be short, be a modern
+  /// citation, and actually contain its own headword as a whole word so
+  /// there is something to blank.
+  Future<List<String>> randomBlankedExamples({
+    required int excludeEntryId,
+    int count = 2,
+    int maxLength = 120,
+  }) async {
+    final rangeRow =
+        await customSelect('SELECT MIN(rowid) AS lo, MAX(rowid) AS hi FROM examples').getSingleOrNull();
+    if (rangeRow == null) return const [];
+    final lo = rangeRow.readNullable<int>('lo');
+    final hi = rangeRow.readNullable<int>('hi');
+    if (lo == null || hi == null || hi < lo) return const [];
+
+    final rand = Random();
+    final span = hi - lo + 1;
+    final sampleSize = (count * 30).clamp(1, span);
+    final candidateRowids = <int>{};
+    while (candidateRowids.length < sampleSize) {
+      candidateRowids.add(lo + rand.nextInt(span));
+    }
+
+    final placeholders = candidateRowids.map((_) => '?').join(',');
+    final rows = await customSelect(
+      '''
+      SELECT x.text, x.source, e.id AS entry_id, e.headword
+      FROM examples x
+      JOIN senses s ON s.id = x.sense_id
+      JOIN entries e ON e.id = s.entry_id
+      WHERE x.rowid IN ($placeholders)
+      ''',
+      variables: candidateRowids.map(Variable.withInt).toList(),
+    ).get();
+
+    final result = <String>[];
+    for (final row in rows) {
+      if (result.length >= count) break;
+      if (row.read<int>('entry_id') == excludeEntryId) continue;
+      if (!_isModernExample(row.readNullable<String>('source'))) continue;
+      final text = row.read<String>('text').trim();
+      if (text.length < 20 || text.length > maxLength) continue;
+      final headword = row.read<String>('headword');
+      final pattern = RegExp(r'\b' + RegExp.escape(headword) + r'\b', caseSensitive: false);
+      if (!pattern.hasMatch(text)) continue;
+      result.add(text.replaceAll(pattern, '_____'));
+    }
+    return result;
+  }
+
+  /// Whether this build of the dictionary carries `examples_fts`. Checked
+  /// once: the index is newer than the schema, and a dictionary.db built
+  /// before it existed still has to work — it just falls back to the random
+  /// sample.
+  Future<bool> get _hasExamplesFts async => _examplesFtsPresent ??= (await customSelect(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'examples_fts'",
+      ).get())
+          .isNotEmpty;
+  bool? _examplesFtsPresent;
+
+  /// Function words and the like — what's left of a sentence after these
+  /// go is what it's *about*, and that is what the distractor search keys
+  /// on. Deliberately short; the FTS ranking does the fine work.
+  static const _stopwords = {
+    'a', 'an', 'the', 'and', 'or', 'but', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'with',
+    'from', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'it', 'its', 'this', 'that',
+    'these', 'those', 'he', 'she', 'they', 'them', 'his', 'her', 'their', 'we', 'our', 'you',
+    'your', 'i', 'my', 'me', 'him', 'us', 'not', 'no', 'so', 'if', 'then', 'than', 'too',
+    'very', 'can', 'could', 'would', 'should', 'will', 'shall', 'may', 'might', 'do', 'does',
+    'did', 'have', 'has', 'had', 'into', 'out', 'up', 'down', 'over', 'about', 'there', 'here',
+    'when', 'where', 'which', 'who', 'what', 'how', 'all', 'any', 'some', 'one', 'more',
+    'most', 'other', 'such', 'only', 'own', 'same', 'just', 'also', 'said', 'says', 'like',
+  };
+
+  /// Blanked sentences from other words that are **about the same things**
+  /// as [text] — sharing its content words, ranked by FTS5's bm25 — so the
+  /// "which sentence wants this word?" game can't be won on topic alone.
+  ///
+  /// Rows from the same entry are skipped, and so is anything that wouldn't
+  /// pass [randomBlankedExamples]'s own filters. Returns fewer than [count]
+  /// when the index turns up nothing usable; the caller tops up at random.
+  Future<List<String>> similarBlankedExamples(
+    String text, {
+    required int excludeEntryId,
+    required String excludeHeadword,
+    int count = 2,
+    int maxLength = 120,
+  }) async {
+    if (!await _hasExamplesFts) return const [];
+    final headwordLower = excludeHeadword.toLowerCase();
+    final terms = <String>{};
+    for (final m in RegExp(r"[a-zA-Z][a-zA-Z'-]{2,}").allMatches(text)) {
+      final w = m.group(0)!.toLowerCase().replaceAll("'", '');
+      if (w.length < 3 || _stopwords.contains(w) || w == headwordLower) continue;
+      if (headwordLower.contains(w) || w.contains(headwordLower)) continue;
+      terms.add(w);
+    }
+    if (terms.isEmpty) return const [];
+    // Each term quoted so punctuation inside a word can't break the query;
+    // OR'd so a sentence sharing any of them ranks, more shared ranking
+    // higher.
+    final query = terms.take(12).map((t) => '"${t.replaceAll('"', '')}"').join(' OR ');
+
+    final rows = await customSelect(
+      '''
+      SELECT x.text, x.source, e.id AS entry_id, e.headword
+      FROM examples_fts f
+      JOIN examples x ON x.id = f.rowid
+      JOIN senses s ON s.id = x.sense_id
+      JOIN entries e ON e.id = s.entry_id
+      WHERE examples_fts MATCH ? AND length(x.text) BETWEEN 20 AND ?
+      ORDER BY bm25(examples_fts)
+      LIMIT 80
+      ''',
+      variables: [Variable.withString(query), Variable.withInt(maxLength)],
+    ).get();
+
+    final result = <String>[];
+    final usedEntries = <int>{excludeEntryId};
+    for (final row in rows) {
+      if (result.length >= count) break;
+      final entryId = row.read<int>('entry_id');
+      if (usedEntries.contains(entryId)) continue;
+      if (!_isModernExample(row.readNullable<String>('source'))) continue;
+      final candidate = row.read<String>('text').trim();
+      if (candidate.length < 20 || candidate.length > maxLength) continue;
+      if (candidate == text.trim()) continue;
+      final headword = row.read<String>('headword');
+      // A distractor whose blank could take *our* word is not a wrong
+      // answer, so the target headword must not appear in it either.
+      if (RegExp(r'\b' + RegExp.escape(excludeHeadword) + r'\b', caseSensitive: false)
+          .hasMatch(candidate)) {
+        continue;
+      }
+      final pattern = RegExp(r'\b' + RegExp.escape(headword) + r'\b', caseSensitive: false);
+      if (!pattern.hasMatch(candidate)) continue;
+      usedEntries.add(entryId);
+      result.add(candidate.replaceAll(pattern, '_____'));
     }
     return result;
   }

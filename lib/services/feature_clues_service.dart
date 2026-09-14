@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'api_key_store.dart';
 
 /// Generates 2-3 short "semantic feature" clues about a word's meaning for
 /// the study session's pre-reveal recall game — clues that circle the
@@ -30,9 +31,13 @@ class FeatureCluesService {
   static const String _definedKey = String.fromEnvironment('OPENAI_API_KEY');
 
   String? get _apiKey {
-    // Belt and braces: even if a release build is handed the define, it does
-    // not call OpenAI directly. A shipping build calls through [proxyUrl] or
-    // not at all.
+    // A key the user pasted into Settings is theirs to spend, in any build
+    // — see ApiKeyStore. The build-time define stays debug-only: even if a
+    // release build is handed it, it does not call OpenAI directly. A
+    // shipping build without a user key goes through [proxyUrl] or not at
+    // all.
+    final userKey = ApiKeyStore.instance.key;
+    if (userKey != null) return userKey;
     if (kReleaseMode) return null;
     final key = _definedKey.trim();
     return key.isEmpty ? null : key;

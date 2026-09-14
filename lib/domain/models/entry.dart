@@ -86,10 +86,19 @@ class EntrySummary {
   final Pos pos;
   final String? gloss;
 
+  /// When a search reached this entry through one of its inflections — the
+  /// user typed "ran" and this is "run" — the form they typed, so the result
+  /// row can say why a different word is showing up.
+  final String? matchedForm;
+
   const EntrySummary({
     required this.id,
     required this.headword,
     required this.pos,
     this.gloss,
+    this.matchedForm,
   });
+
+  EntrySummary withMatchedForm(String form) =>
+      EntrySummary(id: id, headword: headword, pos: pos, gloss: gloss, matchedForm: form);
 }

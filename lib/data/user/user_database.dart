@@ -15,8 +15,13 @@ part 'user_database.g.dart';
 class Lists extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get name => text()();
-  // 'custom' | 'curated'
+  // 'custom' | 'curated' | 'folder'
   TextColumn get kind => text().withDefault(const Constant('custom'))();
+  // Null means top-level. Only a 'folder' row may be pointed at — enforced in
+  // ListRepository, not here, since SQLite has no CHECK-across-rows. A folder
+  // can nest plain lists or other folders, arbitrarily deep, via this same
+  // self-reference — see list_hierarchy.dart for how that subtree is walked.
+  IntColumn get parentId => integer().nullable().references(Lists, #id)();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 }
 
@@ -34,7 +39,18 @@ class ListItems extends Table {
 @DataClassName('StudyCardRow')
 class StudyCards extends Table {
   IntColumn get id => integer().autoIncrement()();
-  IntColumn get entryId => integer().unique()();
+  IntColumn get entryId => integer()();
+
+  /// Which way round this card is asked — [StudyDirection.storageKey],
+  /// 'w2m' or 'm2w'.
+  ///
+  /// A word studied both ways has **two rows here**, not one row with a
+  /// flag: recognising a meaning and producing a word are separate memories
+  /// that are learned and forgotten at their own rates, so each needs its
+  /// own repetitions/ease/interval/due date. Defaults to 'w2m', which is
+  /// what every card was before the column existed.
+  TextColumn get direction => text().withDefault(const Constant('w2m'))();
+
   IntColumn get repetitions => integer().withDefault(const Constant(0))();
   RealColumn get easeFactor => real().withDefault(const Constant(2.5))();
   IntColumn get intervalDays => integer().withDefault(const Constant(0))();
@@ -44,6 +60,39 @@ class StudyCards extends Table {
   // dashboard "due" count, notification content, and forecast — a way to
   // snooze a word without losing history or fully removing it.
   BoolColumn get paused => boolean().withDefault(const Constant(false))();
+
+  // Was a plain `unique()` on entryId, which is exactly what has to go for a
+  // word to have one card per direction. Uniqueness is still what makes
+  // "add this word to study" idempotent — it just applies per (word,
+  // direction) pair now.
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {entryId, direction},
+      ];
+}
+
+/// Which of a word's dictionary senses its study card should carry.
+///
+/// A word like "muse" has eight meanings across two parts of speech; the
+/// one you met in a book is usually not the first one listed, and a card
+/// that shows the first one is a card for a different word than the one you
+/// wanted to remember. Rows here pick the senses that matter, keyed by the
+/// same canonical entry id [StudyCards] uses and the global `dict.senses.id`
+/// — which may belong to a sibling POS row of the same headword, so it is
+/// stored directly rather than as an order within the canonical entry.
+///
+/// No pinned rows for a word means no pin: the card draws one or two of the
+/// word's senses at random each session instead — skipping any row marked
+/// [excluded], which is the opposite gesture: "never ask me this one".
+/// A sense is one or the other, never both.
+@DataClassName('StudySenseRow')
+class StudySenses extends Table {
+  IntColumn get entryId => integer()();
+  IntColumn get senseId => integer()();
+  BoolColumn get excluded => boolean().withDefault(const Constant(false))();
+
+  @override
+  Set<Column> get primaryKey => {entryId, senseId};
 }
 
 @DataClassName('ReviewLogRow')
@@ -54,6 +103,12 @@ class ReviewLog extends Table {
   // 0=again 3=hard 4=good 5=easy — mirrors Grade.q
   IntColumn get grade => integer()();
   IntColumn get priorInterval => integer()();
+
+  /// How long the card was on screen before it was graded, capped by the
+  /// session screen so a phone left face-up on a desk doesn't log an hour of
+  /// "study". 0 on rows written before the column existed and on reviews
+  /// credited from outside a session (a crossword solve).
+  IntColumn get durationMs => integer().withDefault(const Constant(0))();
 }
 
 @DataClassName('SettingRow')
@@ -222,10 +277,132 @@ class CrosswordBannedAnswers extends Table {
   Set<Column> get primaryKey => {answer};
 }
 
+/// One generated Word Hunt board — the 4x4 letter grid with its certified
+/// answer sets and the player's progress on it.
+///
+/// Same shape as [CrosswordPuzzles]: one row per *generation*, today's board
+/// is the newest row for today, and "Start new" adds a row rather than
+/// replacing one. The answer sets are frozen into [puzzleJson] at generation
+/// time and never re-derived, so a dictionary update can't change what a
+/// half-played board accepts (research contract §5).
+@DataClassName('HuntPuzzleRow')
+class HuntPuzzles extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  // 'YYYY-MM-DD', local date the board belongs to.
+  TextColumn get puzzleDate => text()();
+  // Serialized HuntPuzzle: board, anchors, main/bonus answer maps, theme.
+  TextColumn get puzzleJson => text()();
+  // Serialized {"found": [...], "revealed": [...]} — words the player has
+  // traced, and required words they gave up on and were shown.
+  TextColumn get progressJson => text().withDefault(const Constant('{}'))();
+  BoolColumn get completed => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+}
+
+/// One piece of text brought into the Reader tab — the history the tab
+/// keeps, so something copied last week can be reopened with its words
+/// still tappable and still marked against today's lists.
+@DataClassName('ReaderDocumentRow')
+class ReaderDocuments extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get title => text()();
+  // 'clipboard' | 'typed' — ReaderSource.name.
+  TextColumn get source => text().withDefault(const Constant('clipboard'))();
+  // Serialized List<ReaderBlock>: the text with its headings, quotes, list
+  // items and bold/italic runs, so a copied page still looks like one.
+  TextColumn get blocksJson => text()();
+  // The opening ~160 characters, so the history list never has to decode
+  // blocks_json just to show a snippet.
+  TextColumn get preview => text().withDefault(const Constant(''))();
+  // Fingerprint of the flattened text — what stops the same clipboard
+  // contents becoming two history rows.
+  TextColumn get contentHash => text()();
+  IntColumn get wordCount => integer().withDefault(const Constant(0))();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  // Bumped on every open, for display.
+  DateTimeColumn get openedAt => dateTime().withDefault(currentDateAndTime)();
+  // What "most recently opened" actually orders by. Drift stores DateTimes
+  // to the second, so a document reopened from history in the same second
+  // another was pasted would tie on opened_at; this is one higher than the
+  // previous maximum on every open, so the last thing opened always wins.
+  IntColumn get openSeq => integer().withDefault(const Constant(0))();
+}
+
+/// One play of one game in the Games tab — what the progress screen counts
+/// and times.
+///
+/// Deliberately generic: the crossword is the first writer, but any game
+/// added later records itself the same way and the progress screen needs no
+/// per-game code. Timing is **active** time — the screen in front and the
+/// app in the foreground — accumulated by the game screen and flushed here
+/// as it goes, because a puzzle saved on Monday and finished on Wednesday
+/// did not take two days.
+///
+/// A row is created when the play starts and [completedAt] stays null until
+/// it is finished, so an abandoned puzzle is visible as one. [aided] is set
+/// if any cell was revealed: an aided time is not comparable to a clean one,
+/// so personal bests only rank clean solves.
+@DataClassName('GameResultRow')
+class GameResults extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  /// 'crossword' or 'hunt'.
+  TextColumn get game => text()();
+  TextColumn get difficulty => text().withDefault(const Constant(''))();
+
+  /// The game's own row this play belongs to — a `crossword_puzzles` id.
+  IntColumn get refId => integer()();
+  DateTimeColumn get startedAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get completedAt => dateTime().nullable()();
+  IntColumn get activeMs => integer().withDefault(const Constant(0))();
+  BoolColumn get aided => boolean().withDefault(const Constant(false))();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {game, refId},
+      ];
+}
+
+/// Queries typed into the Search tab — the tab's recent-searches list.
+///
+/// Kept apart from [LookupLog] on purpose: a search is not a lookup. Typing
+/// "ser" and scrolling past the results taught nothing and counts for
+/// nothing; it is remembered only so it can be re-run. One row per distinct
+/// query (case-insensitive), its timestamp bumped on repeat.
+@DataClassName('SearchLogRow')
+class SearchLog extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get query => text()();
+  DateTimeColumn get searchedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {query},
+      ];
+}
+
+/// Words the user looked up: searched for on the Search tab and then opened.
+///
+/// Only that path writes here. Opening a word from a list, the reader or a
+/// crossword clue is browsing, not looking up — it was already in front of
+/// them. Append-only, so a word looked up three times shows up three times:
+/// repeat lookups are the signal that a word belongs in study.
+@DataClassName('LookupLogRow')
+class LookupLog extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get entryId => integer()();
+  TextColumn get headword => text()();
+
+  /// 'search' — kept as a column so a later source can be told apart.
+  TextColumn get source => text().withDefault(const Constant('search'))();
+  DateTimeColumn get lookedUpAt => dateTime().withDefault(currentDateAndTime)();
+}
+
 @DriftDatabase(tables: [
   Lists,
   ListItems,
   StudyCards,
+  StudySenses,
   ReviewLog,
   Settings,
   EntryNotes,
@@ -233,12 +410,17 @@ class CrosswordBannedAnswers extends Table {
   CrosswordSolveEvents,
   CrosswordReviewLog,
   CrosswordBannedAnswers,
+  ReaderDocuments,
+  HuntPuzzles,
+  GameResults,
+  SearchLog,
+  LookupLog,
 ])
 class UserDatabase extends _$UserDatabase {
   UserDatabase(super.e);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 15;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -293,6 +475,60 @@ class UserDatabase extends _$UserDatabase {
           }
           if (from < 8) {
             await m.createTable(crosswordBannedAnswers);
+          }
+          if (from < 9) {
+            // Study cards gain a direction, and with it the ability for one
+            // word to hold two independently-scheduled cards. That means
+            // dropping the UNIQUE constraint on entry_id in favour of a
+            // composite one over (entry_id, direction) — and SQLite has no
+            // DROP CONSTRAINT, so the table is rebuilt from its current Dart
+            // definition the same way crossword_puzzles was in v7. Existing
+            // rows take the column default, 'w2m', which is the direction
+            // they have always been asked in.
+            // ignore: experimental_member_use
+            await m.alterTable(TableMigration(
+              studyCards,
+              newColumns: [studyCards.direction],
+            ));
+          }
+          if (from < 10) {
+            // Folders: a plain nullable self-reference, so existing rows
+            // (NULL = top-level) need no backfill.
+            await m.addColumn(lists, lists.parentId);
+          }
+          if (from < 11) {
+            await m.createTable(readerDocuments);
+          }
+          if (from < 12) {
+            await m.createTable(studySenses);
+          }
+          if (from < 13) {
+            // Progress tracking: reviews gain a duration, and the three
+            // ledgers the progress screen aggregates. Existing reviews take
+            // the 0 default — their time was never measured.
+            await m.addColumn(reviewLog, reviewLog.durationMs);
+            await m.createTable(gameResults);
+            await m.createTable(searchLog);
+            await m.createTable(lookupLog);
+            // Puzzles finished before plays were recorded still count as
+            // finished. Their time was never measured, so active_ms stays
+            // 0 and they are left out of the bests; whether they were
+            // aided is known from the solve events.
+            await m.database.customStatement(
+              'INSERT INTO game_results '
+              '(game, difficulty, ref_id, started_at, completed_at, active_ms, aided) '
+              "SELECT 'crossword', p.difficulty, p.id, p.created_at, p.created_at, 0, "
+              '  EXISTS(SELECT 1 FROM crossword_solve_events e '
+              "         WHERE e.puzzle_id = p.id AND e.revealed_json != '[]') "
+              'FROM crossword_puzzles p WHERE p.completed = 1',
+            );
+          }
+          if (from < 14) {
+            // Existing rows are all pins — the only thing the table held.
+            await m.addColumn(studySenses, studySenses.excluded);
+          }
+          if (from < 15) {
+            await m.createTable(huntPuzzles);
           }
         },
       );

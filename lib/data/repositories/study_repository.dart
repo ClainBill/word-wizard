@@ -1,22 +1,55 @@
+import 'dart:math';
+
 import 'package:drift/drift.dart';
 
 import '../../domain/models/reminder_word.dart';
 import '../../domain/models/study_card.dart';
 import '../../domain/models/study_card_summary.dart';
 import '../../domain/models/study_dashboard.dart';
+import '../../domain/models/study_direction.dart';
 import '../../domain/srs/sm2.dart';
 import '../user/user_database.dart';
+import 'list_hierarchy.dart';
 
 // A card counts as mastered once it clears both SM-2 thresholds from the
 // design doc's card lifecycle: interval >= 90 days and ease factor >= 2.5.
-const _masteredClause = 'interval_days >= 90 AND ease_factor >= 2.5';
+const masteredClause = 'interval_days >= 90 AND ease_factor >= 2.5';
+
+/// Cards whose direction the user currently has switched off are excluded
+/// the same way paused ones are: they keep every bit of their SM-2 state and
+/// review history, they just stop being queued, counted or forecast. That's
+/// what makes turning "both ways" on and back off a free, reversible
+/// experiment rather than a decision that throws away scheduling.
+///
+/// [alias] is the table alias in the query being built (empty for an
+/// unaliased `study_cards`). The values interpolated are
+/// [StudyDirection.storageKey] constants, never anything user-supplied.
+String _directionFilter(Set<StudyDirection> directions, {String alias = ''}) {
+  final prefix = alias.isEmpty ? '' : '$alias.';
+  final keys = directions.map((d) => "'${d.storageKey}'").join(', ');
+  return '${prefix}direction IN ($keys)';
+}
+
+/// What the user has decided about one word's meanings — see [StudySenses].
+class SenseChoices {
+  final Set<int> pinned;
+  final Set<int> excluded;
+
+  const SenseChoices({required this.pinned, required this.excluded});
+
+  static const none = SenseChoices(pinned: {}, excluded: {});
+}
 
 class StudyRepository {
   final UserDatabase _db;
 
-  StudyRepository(this._db);
+  /// Source of the per-session sense draw — injectable so tests can pin it.
+  final Random _random;
 
-  Stream<int> watchDueCount() {
+  StudyRepository(this._db, {Random? random}) : _random = random ?? Random();
+
+  Stream<int> watchDueCount(Set<StudyDirection> directions) {
+    if (directions.isEmpty) return Stream.value(0);
     return _db
         .customSelect(
           // Paused cards keep their SRS state but are excluded from "due" —
@@ -36,36 +69,97 @@ class StudyRepository {
           // SQLite's type-affinity ordering ranks every INTEGER below every
           // TEXT value.
           "SELECT COUNT(*) AS c FROM study_cards "
-          "WHERE due_at <= CAST(strftime('%s', 'now') AS INTEGER) AND paused = 0",
+          "WHERE due_at <= CAST(strftime('%s', 'now') AS INTEGER) AND paused = 0 "
+          "AND ${_directionFilter(directions)}",
           readsFrom: {_db.studyCards},
         )
         .watchSingle()
         .map((r) => r.read<int>('c'));
   }
 
-  /// Adds an entry to the study pool if it isn't already in it. The new
-  /// card is immediately due, matching renzo's "+ Study" behavior.
-  Future<void> ensureCard(int entryId) {
-    return _db.into(_db.studyCards).insert(
-          StudyCardsCompanion.insert(entryId: entryId),
-          mode: InsertMode.insertOrIgnore,
-        );
+  /// Adds an entry to the study pool if it isn't already in it, creating one
+  /// card per requested direction. New cards are immediately due, matching
+  /// renzo's "+ Study" behavior.
+  Future<void> ensureCard(int entryId, Set<StudyDirection> directions) async {
+    if (directions.isEmpty) return;
+    await _db.batch((b) {
+      b.insertAll(
+        _db.studyCards,
+        [
+          for (final d in directions)
+            StudyCardsCompanion.insert(entryId: entryId, direction: Value(d.storageKey)),
+        ],
+        mode: InsertMode.insertOrIgnore,
+      );
+    });
   }
 
+  /// True if the word is in the study pool in *any* direction — the "Study"
+  /// button is about the word, not about one of its cards.
   Future<bool> isStudying(int entryId) async {
     final row = await (_db.select(_db.studyCards)
           ..where((t) => t.entryId.equals(entryId)))
-        .getSingleOrNull();
-    return row != null;
+        .get();
+    return row.isNotEmpty;
   }
 
-  Future<List<StudyCard>> dueQueue({int? listId, int limit = 50}) async {
+  /// Backfills cards for every direction the user has switched on, for words
+  /// already in the pool. Called whenever the direction setting changes.
+  ///
+  /// A newly created sibling inherits the *earliest* due date among the
+  /// word's existing cards rather than becoming due immediately. Turning on
+  /// "both ways" with 300 words already enrolled would otherwise dump 300
+  /// brand-new reviews into today — the single fastest way to make someone
+  /// abandon an SRS. Inheriting spreads the new direction across the
+  /// schedule the word already has, so it arrives alongside a review you
+  /// were going to do anyway.
+  Future<void> syncDirections(Set<StudyDirection> directions) async {
+    if (directions.isEmpty) return;
+    final rows = await _db.customSelect(
+      'SELECT entry_id, MIN(due_at) AS due_at FROM study_cards GROUP BY entry_id',
+      readsFrom: {_db.studyCards},
+    ).get();
+    if (rows.isEmpty) return;
+
+    // Goes through the typed batch-insert API rather than a raw
+    // INSERT ... SELECT so drift's reactive watchers (the due count, the
+    // dashboard, the forecast) see the change immediately — see the comment
+    // on [setListPaused].
+    await _db.batch((b) {
+      b.insertAll(
+        _db.studyCards,
+        [
+          for (final r in rows)
+            for (final d in directions)
+              StudyCardsCompanion.insert(
+                entryId: r.read<int>('entry_id'),
+                direction: Value(d.storageKey),
+                dueAt: Value(r.read<DateTime>('due_at')),
+              ),
+        ],
+        mode: InsertMode.insertOrIgnore,
+      );
+    });
+  }
+
+  /// [listId] may name a plain list or a folder — a folder pulls in every
+  /// word nested inside it at any depth (see list_hierarchy.dart). Filters
+  /// list membership with `EXISTS` rather than joining `list_items` directly:
+  /// a folder's subtree can contain the same word via more than one nested
+  /// list, and a join would duplicate that card in the queue once per match.
+  Future<List<StudyCard>> dueQueue({
+    required Set<StudyDirection> directions,
+    int? listId,
+    int limit = 50,
+  }) async {
+    if (directions.isEmpty) return const [];
     final now = Variable.withDateTime(DateTime.now());
+    final filter = _directionFilter(directions, alias: 'sc');
     final rows = await _db
         .customSelect(
           listId == null
               ? '''
-                SELECT sc.id AS card_id, sc.entry_id, sc.repetitions, sc.ease_factor,
+                SELECT sc.id AS card_id, sc.entry_id, sc.direction, sc.repetitions, sc.ease_factor,
                        sc.interval_days, sc.due_at, e.headword, e.pos, p.ipa, en.markdown AS note,
                   (SELECT gloss FROM dict.senses WHERE entry_id = e.id ORDER BY sense_order LIMIT 1) AS gloss,
                   (SELECT x.text FROM dict.examples x
@@ -75,12 +169,13 @@ class StudyRepository {
                 JOIN dict.entries e ON e.id = sc.entry_id
                 LEFT JOIN dict.pronunciations p ON p.entry_id = e.id
                 LEFT JOIN entry_notes en ON en.entry_id = sc.entry_id
-                WHERE sc.due_at <= ? AND sc.paused = 0
+                WHERE sc.due_at <= ? AND sc.paused = 0 AND $filter
                 ORDER BY sc.due_at
                 LIMIT ?
                 '''
               : '''
-                SELECT sc.id AS card_id, sc.entry_id, sc.repetitions, sc.ease_factor,
+                $listSubtreeCte
+                SELECT sc.id AS card_id, sc.entry_id, sc.direction, sc.repetitions, sc.ease_factor,
                        sc.interval_days, sc.due_at, e.headword, e.pos, p.ipa, en.markdown AS note,
                   (SELECT gloss FROM dict.senses WHERE entry_id = e.id ORDER BY sense_order LIMIT 1) AS gloss,
                   (SELECT x.text FROM dict.examples x
@@ -88,31 +183,229 @@ class StudyRepository {
                      WHERE s2.entry_id = e.id ORDER BY s2.sense_order LIMIT 1) AS example
                 FROM study_cards sc
                 JOIN dict.entries e ON e.id = sc.entry_id
-                JOIN list_items li ON li.entry_id = sc.entry_id AND li.list_id = ?
                 LEFT JOIN dict.pronunciations p ON p.entry_id = e.id
                 LEFT JOIN entry_notes en ON en.entry_id = sc.entry_id
-                WHERE sc.due_at <= ? AND sc.paused = 0
+                WHERE sc.due_at <= ? AND sc.paused = 0 AND $filter
+                  AND EXISTS (
+                    SELECT 1 FROM list_items li
+                    WHERE li.entry_id = sc.entry_id AND li.list_id IN (SELECT id FROM list_subtree)
+                  )
                 ORDER BY sc.due_at
                 LIMIT ?
                 ''',
           variables: listId == null
               ? [now, Variable.withInt(limit)]
               : [Variable.withInt(listId), now, Variable.withInt(limit)],
-          readsFrom: {_db.studyCards, _db.listItems, _db.entryNotes},
+          readsFrom: {_db.studyCards, _db.listItems, _db.entryNotes, _db.lists},
         )
         .get();
 
-    return rows.map(_rowToCard).toList();
+    return spaceSiblings(await _applySenses(rows.map(_rowToCard).toList()));
+  }
+
+  // ---------------------------------------------------------------------
+  // Which meanings a card carries.
+  // ---------------------------------------------------------------------
+
+  /// The sense ids the user pinned for [entryId] — empty means no pin, so
+  /// the card draws one or two of the word's senses at random each review.
+  Stream<Set<int>> watchChosenSenses(int entryId) =>
+      watchSenseChoices(entryId).map((c) => c.pinned);
+
+  /// Both of the user's decisions about a word's meanings: the ones pinned
+  /// to the card and the ones kept off it.
+  Stream<SenseChoices> watchSenseChoices(int entryId) {
+    return (_db.select(_db.studySenses)..where((t) => t.entryId.equals(entryId)))
+        .watch()
+        .map((rows) => SenseChoices(
+              pinned: {for (final r in rows) if (!r.excluded) r.senseId},
+              excluded: {for (final r in rows) if (r.excluded) r.senseId},
+            ));
+  }
+
+  /// Replaces the pinned senses for [entryId], keeping its exclusions. An
+  /// empty set clears the pin and puts the card back on the random draw.
+  Future<void> setChosenSenses(int entryId, Set<int> senseIds) async {
+    final current = await watchSenseChoices(entryId).first;
+    await setSenseChoices(entryId, pinned: senseIds, excluded: current.excluded);
+  }
+
+  /// Replaces every choice for [entryId]. A sense in both sets is treated
+  /// as pinned — a pin is the more deliberate of the two gestures.
+  Future<void> setSenseChoices(
+    int entryId, {
+    required Set<int> pinned,
+    required Set<int> excluded,
+  }) async {
+    await _db.batch((b) {
+      b.deleteWhere(_db.studySenses, (t) => t.entryId.equals(entryId));
+      b.insertAll(
+        _db.studySenses,
+        [
+          for (final id in pinned) StudySensesCompanion.insert(entryId: entryId, senseId: id),
+          for (final id in excluded.difference(pinned))
+            StudySensesCompanion.insert(
+              entryId: entryId,
+              senseId: id,
+              excluded: const Value(true),
+            ),
+        ],
+        mode: InsertMode.insertOrIgnore,
+      );
+    });
+  }
+
+  /// Decides which meanings each card in the batch carries.
+  ///
+  /// A word the user pinned senses for gets exactly those. Any other word
+  /// gets **one or two of its senses drawn at random** — across every POS
+  /// row of the headword, the same set the entry screen shows — so a word
+  /// with eight meanings isn't forever tested on whichever one the
+  /// dictionary happened to list first. The draw happens once per batch,
+  /// i.e. once per session, so the card is stable while it's on screen and
+  /// different next time.
+  ///
+  /// Done as extra queries over the batch rather than inside each card
+  /// query's SELECT: both the pin and the draw can span sibling POS rows and
+  /// be several senses, neither of which a scalar subquery expresses well.
+  /// Order within a card is the dictionary's own — the canonical entry's
+  /// senses first, then any sibling POS row's — so a card reads the way the
+  /// entry does.
+  Future<List<StudyCard>> _applySenses(List<StudyCard> cards) async {
+    if (cards.isEmpty) return cards;
+    final entryIds = cards.map((c) => c.entryId).toSet().toList();
+    final placeholders = entryIds.map((_) => '?').join(',');
+    final variables = entryIds.map(Variable.withInt).toList();
+
+    final pinned = _groupSenses(await _db
+        .customSelect(
+          '''
+          SELECT ss.entry_id, s.id AS sense_id, s.gloss, e.pos,
+            (SELECT x.text FROM dict.examples x WHERE x.sense_id = s.id ORDER BY x.id LIMIT 1) AS example
+          FROM study_senses ss
+          JOIN dict.senses s ON s.id = ss.sense_id
+          JOIN dict.entries e ON e.id = s.entry_id
+          WHERE ss.entry_id IN ($placeholders) AND ss.excluded = 0
+          ORDER BY ss.entry_id, (s.entry_id = ss.entry_id) DESC, s.entry_id, s.sense_order
+          ''',
+          variables: variables,
+          readsFrom: {_db.studySenses},
+        )
+        .get());
+
+    final unpinnedIds = entryIds.where((id) => !pinned.containsKey(id)).toList();
+    final drawn = <int, List<StudySense>>{};
+    if (unpinnedIds.isNotEmpty) {
+      final unpinnedPlaceholders = unpinnedIds.map((_) => '?').join(',');
+      // Every sense of every entry row sharing the canonical row's headword,
+      // flagged where the user has excluded it.
+      final rows = await _db
+          .customSelect(
+            '''
+            SELECT ce.id AS entry_id, s.id AS sense_id, s.gloss, e.pos,
+              (SELECT x.text FROM dict.examples x WHERE x.sense_id = s.id ORDER BY x.id LIMIT 1) AS example,
+              EXISTS(SELECT 1 FROM study_senses ss
+                     WHERE ss.entry_id = ce.id AND ss.sense_id = s.id AND ss.excluded = 1) AS excluded
+            FROM dict.entries ce
+            JOIN dict.entries e ON e.headword = ce.headword
+            JOIN dict.senses s ON s.entry_id = e.id
+            WHERE ce.id IN ($unpinnedPlaceholders)
+            ORDER BY ce.id, (e.id = ce.id) DESC, e.id, s.sense_order
+            ''',
+            variables: unpinnedIds.map(Variable.withInt).toList(),
+            readsFrom: {_db.studyCards, _db.studySenses},
+          )
+          .get();
+      final all = _groupSenses(rows);
+      final allowed = _groupSenses([for (final r in rows) if (r.read<int>('excluded') == 0) r]);
+      // A word with every meaning excluded still needs something on its
+      // card — the exclusions are ignored rather than the card left blank.
+      all.forEach((entryId, senses) {
+        final pool = allowed[entryId] ?? const <StudySense>[];
+        drawn[entryId] = drawSenses(pool.isEmpty ? senses : pool, _random);
+      });
+    }
+
+    return [for (final c in cards) c.withSenses(pinned[c.entryId] ?? drawn[c.entryId] ?? const [])];
+  }
+
+  Map<int, List<StudySense>> _groupSenses(List<QueryRow> rows) {
+    final byEntry = <int, List<StudySense>>{};
+    for (final r in rows) {
+      byEntry.putIfAbsent(r.read<int>('entry_id'), () => []).add(StudySense(
+            senseId: r.read<int>('sense_id'),
+            gloss: r.read<String>('gloss'),
+            pos: r.read<String>('pos'),
+            example: r.readNullable<String>('example'),
+          ));
+    }
+    return byEntry;
+  }
+
+  /// One or two of [senses] at random, kept in their original order. Two
+  /// only when the word has at least two and a coin flip says so — a card
+  /// that always showed two would be twice the reading for every review.
+  ///
+  /// Visible for testing.
+  static List<StudySense> drawSenses(List<StudySense> senses, Random random) {
+    if (senses.length <= 1) return senses;
+    final count = random.nextBool() ? 2 : 1;
+    final picked = (List.of(senses)..shuffle(random)).take(count).toSet();
+    return [for (final s in senses) if (picked.contains(s)) s];
+  }
+
+  /// Drops sense choices for words no longer in the pool. A choice is a
+  /// property of *studying* the word, so it goes when the last card does —
+  /// re-adding the word later starts clean, the same as its review history.
+  Future<void> _pruneChosenSenses() async {
+    final enrolled = _db.selectOnly(_db.studyCards)..addColumns([_db.studyCards.entryId]);
+    await (_db.delete(_db.studySenses)
+          ..where((t) => t.entryId.isNotInQuery(enrolled)))
+        .go();
+  }
+
+  /// Keeps a word's two directions from landing back to back in the queue.
+  ///
+  /// Both cards of a word usually come due on the same day, and answering
+  /// "abstruse → ?" immediately after "? → abstruse" isn't a second
+  /// retrieval — the answer is still on screen in your short-term memory, so
+  /// the second card grades itself and its interval grows on evidence that
+  /// doesn't exist. Anki calls the same problem sibling burying. This is the
+  /// cheap version: keep the order otherwise intact, but pull a different
+  /// word forward whenever the next card repeats the current one.
+  ///
+  /// Visible for testing.
+  static List<StudyCard> spaceSiblings(List<StudyCard> cards) {
+    final remaining = List.of(cards);
+    final result = <StudyCard>[];
+    while (remaining.isNotEmpty) {
+      var pick = 0;
+      if (result.isNotEmpty) {
+        final lastEntry = result.last.entryId;
+        if (remaining.first.entryId == lastEntry) {
+          final alternative = remaining.indexWhere((c) => c.entryId != lastEntry);
+          // -1 means every card left belongs to the same word; nothing to do
+          // but take them in order.
+          if (alternative != -1) pick = alternative;
+        }
+      }
+      result.add(remaining.removeAt(pick));
+    }
+    return result;
   }
 
   /// Every non-paused card in the study pool regardless of due date — used
   /// to pad out the daily crossword when today's due queue alone isn't
   /// enough words for the requested puzzle size.
-  Future<List<StudyCard>> allStudyingCards({int limit = 200}) async {
+  Future<List<StudyCard>> allStudyingCards({
+    Set<StudyDirection>? directions,
+    int limit = 200,
+  }) async {
+    final filter = directions == null ? '' : 'AND ${_directionFilter(directions, alias: 'sc')}';
     final rows = await _db
         .customSelect(
           '''
-          SELECT sc.id AS card_id, sc.entry_id, sc.repetitions, sc.ease_factor,
+          SELECT sc.id AS card_id, sc.entry_id, sc.direction, sc.repetitions, sc.ease_factor,
                  sc.interval_days, sc.due_at, e.headword, e.pos, p.ipa, en.markdown AS note,
             (SELECT gloss FROM dict.senses WHERE entry_id = e.id ORDER BY sense_order LIMIT 1) AS gloss,
             (SELECT x.text FROM dict.examples x
@@ -122,7 +415,7 @@ class StudyRepository {
           JOIN dict.entries e ON e.id = sc.entry_id
           LEFT JOIN dict.pronunciations p ON p.entry_id = e.id
           LEFT JOIN entry_notes en ON en.entry_id = sc.entry_id
-          WHERE sc.paused = 0
+          WHERE sc.paused = 0 $filter
           ORDER BY sc.due_at
           LIMIT ?
           ''',
@@ -131,26 +424,39 @@ class StudyRepository {
         )
         .get();
 
-    return rows.map(_rowToCard).toList();
+    return _applySenses(rows.map(_rowToCard).toList());
   }
 
   /// Enrolls every word in [listId] into the study pool (skipping ones
-  /// already there) so a whole list can be targeted for daily review at
-  /// once, rather than requiring each word to be added individually first.
-  /// Goes through the typed batch-insert API rather than a raw INSERT
-  /// statement so drift's reactive watchers pick up the change immediately
-  /// — see the comment on [setListPaused].
-  Future<void> enrollList(int listId) async {
+  /// already there) so a whole list — or, since [listId] may be a folder,
+  /// everything nested inside it — can be targeted for daily review at once,
+  /// rather than requiring each word to be added individually first. Goes
+  /// through the typed batch-insert API rather than a raw INSERT statement so
+  /// drift's reactive watchers pick up the change immediately — see the
+  /// comment on [setListPaused].
+  Future<void> enrollList(int listId, Set<StudyDirection> directions) async {
+    if (directions.isEmpty) return;
     final rows = await _db.customSelect(
-      'SELECT entry_id FROM list_items WHERE list_id = ?',
+      '''
+      $listSubtreeCte
+      SELECT DISTINCT entry_id FROM list_items
+      WHERE list_id IN (SELECT id FROM list_subtree)
+      ''',
       variables: [Variable.withInt(listId)],
-      readsFrom: {_db.listItems},
+      readsFrom: {_db.listItems, _db.lists},
     ).get();
     if (rows.isEmpty) return;
     await _db.batch((b) {
       b.insertAll(
         _db.studyCards,
-        [for (final r in rows) StudyCardsCompanion.insert(entryId: r.read<int>('entry_id'))],
+        [
+          for (final r in rows)
+            for (final d in directions)
+              StudyCardsCompanion.insert(
+                entryId: r.read<int>('entry_id'),
+                direction: Value(d.storageKey),
+              ),
+        ],
         mode: InsertMode.insertOrIgnore,
       );
     });
@@ -166,6 +472,7 @@ class StudyRepository {
       gloss: r.readNullable<String>('gloss'),
       example: r.readNullable<String>('example'),
       note: r.readNullable<String>('note'),
+      direction: StudyDirection.fromStorageKey(r.read<String>('direction')),
       srs: StudyCardState(
         repetitions: r.read<int>('repetitions'),
         easeFactor: r.read<double>('ease_factor'),
@@ -178,11 +485,15 @@ class StudyRepository {
   /// Picks one random word due within the next 24h — for the daily
   /// notification, which wants variety rather than always the same
   /// earliest-due card. Returns null if nothing is due that soon.
+  ///
+  /// Grouped by entry: a word studied both ways has two due cards but is
+  /// still one word to be reminded about.
   Future<ReminderWord?> pickReminderWord() async {
     final rows = await _db
         .customSelect(
           '''
-          SELECT e.headword,
+          SELECT sc.id AS card_id, sc.entry_id, sc.direction, sc.repetitions, sc.ease_factor,
+                 sc.interval_days, sc.due_at, e.headword, e.pos, NULL AS ipa, NULL AS note,
             (SELECT gloss FROM dict.senses WHERE entry_id = e.id ORDER BY sense_order LIMIT 1) AS gloss,
             (SELECT x.text FROM dict.examples x
                JOIN dict.senses s2 ON s2.id = x.sense_id
@@ -190,6 +501,7 @@ class StudyRepository {
           FROM study_cards sc
           JOIN dict.entries e ON e.id = sc.entry_id
           WHERE sc.due_at <= ? AND sc.paused = 0
+          GROUP BY sc.entry_id
           ORDER BY RANDOM()
           LIMIT 1
           ''',
@@ -198,28 +510,40 @@ class StudyRepository {
         )
         .getSingleOrNull();
     if (rows == null) return null;
-    final gloss = rows.readNullable<String>('gloss');
+    // Through the same hydration as a session card, so the reminder talks
+    // about the meaning the user chose to remember, not the dictionary's
+    // first one.
+    final card = (await _applySenses([_rowToCard(rows)])).single;
+    final gloss = card.gloss;
     if (gloss == null) return null;
-    return ReminderWord(
-      headword: rows.read<String>('headword'),
-      meaning: gloss,
-      example: rows.readNullable<String>('example'),
-    );
+    return ReminderWord(headword: card.headword, meaning: gloss, example: card.example);
   }
 
-  Stream<StudyDashboardStats> watchStats() {
+  /// Dashboard counts. Card-level counts (due, mastered, learning,
+  /// reviewing) cover only the directions currently switched on — they
+  /// describe the workload you actually have. [StudyDashboardStats.total]
+  /// deliberately counts *words*, not cards, so turning "both ways" on
+  /// doesn't make it look like your vocabulary doubled overnight.
+  Stream<StudyDashboardStats> watchStats(Set<StudyDirection> directions) {
+    if (directions.isEmpty) {
+      return Stream.value(
+        const StudyDashboardStats(dueToday: 0, mastered: 0, learning: 0, reviewing: 0, total: 0),
+      );
+    }
+    final filter = _directionFilter(directions);
     return _db
         .customSelect(
           '''
           SELECT
             (SELECT COUNT(*) FROM study_cards
-               WHERE due_at <= CAST(strftime('%s', 'now') AS INTEGER) AND paused = 0) AS due_today,
-            (SELECT COUNT(*) FROM study_cards WHERE $_masteredClause) AS mastered,
+               WHERE due_at <= CAST(strftime('%s', 'now') AS INTEGER) AND paused = 0
+                 AND $filter) AS due_today,
+            (SELECT COUNT(*) FROM study_cards WHERE $masteredClause AND $filter) AS mastered,
             (SELECT COUNT(*) FROM study_cards
-               WHERE NOT ($_masteredClause) AND repetitions < 2) AS learning,
+               WHERE NOT ($masteredClause) AND repetitions < 2 AND $filter) AS learning,
             (SELECT COUNT(*) FROM study_cards
-               WHERE NOT ($_masteredClause) AND repetitions >= 2) AS reviewing,
-            (SELECT COUNT(*) FROM study_cards) AS total
+               WHERE NOT ($masteredClause) AND repetitions >= 2 AND $filter) AS reviewing,
+            (SELECT COUNT(DISTINCT entry_id) FROM study_cards) AS total
           ''',
           // See watchDueCount for why "now" is computed in SQL rather than
           // bound as a Dart parameter — same staleness bug applies here.
@@ -239,11 +563,12 @@ class StudyRepository {
   /// already overdue folds into today's bucket rather than being dropped,
   /// since it will surface in the same session as today's cards. Paused
   /// cards never show up here — they won't actually come due on their own.
-  Stream<List<int>> watchForecast({int days = 14}) {
+  Stream<List<int>> watchForecast(Set<StudyDirection> directions, {int days = 14}) {
+    if (directions.isEmpty) return Stream.value(List<int>.filled(days, 0));
     return _db
         .customSelect(
           "SELECT date(due_at, 'unixepoch', 'localtime') AS d, COUNT(*) AS c "
-          "FROM study_cards WHERE paused = 0 GROUP BY d",
+          "FROM study_cards WHERE paused = 0 AND ${_directionFilter(directions)} GROUP BY d",
           readsFrom: {_db.studyCards},
         )
         .watch()
@@ -300,8 +625,22 @@ class StudyRepository {
         });
   }
 
-  Future<void> grade(StudyCard card, Grade grade) async {
+  /// Reviews longer than this are logged as this long. Anki uses the same
+  /// idea (its default is 60s): past a couple of minutes the card isn't
+  /// being thought about, the phone has been put down.
+  static const maxReviewDuration = Duration(minutes: 2);
+
+  /// Applies [grade] to [card] and logs the review. Returns the resulting
+  /// SM-2 state so the caller can tell the user when the card comes back
+  /// without re-running the algorithm.
+  ///
+  /// [spent] is how long the card was on screen; omitted for reviews earned
+  /// outside a session (a crossword solve), which have no meaningful time.
+  Future<SrsUpdate> grade(StudyCard card, Grade grade, {Duration? spent}) async {
     final update = gradeCard(card.srs, grade);
+    final durationMs = spent == null
+        ? 0
+        : (spent > maxReviewDuration ? maxReviewDuration : spent).inMilliseconds;
     await _db.batch((b) {
       b.update(
         _db.studyCards,
@@ -319,9 +658,11 @@ class StudyRepository {
           cardId: card.cardId,
           grade: grade.q,
           priorInterval: card.srs.intervalDays,
+          durationMs: Value(durationMs),
         ),
       );
     });
+    return update;
   }
 
   // ---------------------------------------------------------------------
@@ -329,18 +670,27 @@ class StudyRepository {
   // resetting/pausing/removing it (individually or for a whole list).
   // ---------------------------------------------------------------------
 
-  /// Every word currently in the study pool, newest-added first, with a
-  /// review count for the "how many times has this been reviewed" summary.
+  /// Every card currently in the study pool — one row per (word,
+  /// direction) — newest-added word first, with a review count for the "how
+  /// many times has this been reviewed" summary.
+  ///
+  /// Sorted by *when the word was first enrolled*, not by each card's own
+  /// `created_at`, so a word's two directions stay next to each other. They
+  /// don't necessarily share a creation time: a reverse card backfilled by
+  /// [syncDirections] months later would otherwise sort into its own block
+  /// at the top of the list, separated from the card it belongs with.
   Stream<List<StudyCardSummary>> watchAllCards() {
     return _db
         .customSelect(
           '''
-          SELECT sc.id AS card_id, sc.entry_id, sc.repetitions, sc.ease_factor,
+          SELECT sc.id AS card_id, sc.entry_id, sc.direction, sc.repetitions, sc.ease_factor,
                  sc.interval_days, sc.due_at, sc.created_at, sc.paused, e.headword, e.pos,
             (SELECT COUNT(*) FROM review_log rl WHERE rl.card_id = sc.id) AS review_count
           FROM study_cards sc
           JOIN dict.entries e ON e.id = sc.entry_id
-          ORDER BY sc.created_at DESC
+          ORDER BY (SELECT MIN(s2.created_at) FROM study_cards s2
+                     WHERE s2.entry_id = sc.entry_id) DESC,
+                   sc.entry_id, sc.direction
           ''',
           readsFrom: {_db.studyCards},
         )
@@ -351,6 +701,7 @@ class StudyRepository {
                   entryId: r.read<int>('entry_id'),
                   headword: r.read<String>('headword'),
                   pos: r.read<String>('pos'),
+                  direction: StudyDirection.fromStorageKey(r.read<String>('direction')),
                   createdAt: r.read<DateTime>('created_at'),
                   dueAt: r.read<DateTime>('due_at'),
                   paused: r.read<bool>('paused'),
@@ -404,14 +755,31 @@ class StudyRepository {
         .write(StudyCardsCompanion(paused: Value(paused)));
   }
 
-  /// Removes a word from the SRS pool entirely, along with its review
-  /// history. The word itself, its list memberships, and its notes are
-  /// untouched — this only un-enrolls it from studying.
+  /// Removes one card — one word in one direction — along with its review
+  /// history. The word's other direction, if it has one, is untouched.
   Future<void> removeCard(int cardId) async {
     await _db.batch((b) {
       b.deleteWhere(_db.reviewLog, (t) => t.cardId.equals(cardId));
       b.deleteWhere(_db.studyCards, (t) => t.id.equals(cardId));
     });
+    await _pruneChosenSenses();
+  }
+
+  /// Removes a word from the SRS pool entirely — every direction, and their
+  /// review history. The word itself, its list memberships, and its notes
+  /// are untouched: this only un-enrols it from studying. This is what
+  /// "remove from study" means to someone looking at a word, as opposed to
+  /// [removeCard], which is about one scheduled card.
+  Future<void> removeEntry(int entryId) async {
+    final ids = await (_db.select(_db.studyCards)..where((t) => t.entryId.equals(entryId)))
+        .get()
+        .then((rows) => rows.map((r) => r.id).toList());
+    if (ids.isEmpty) return;
+    await _db.batch((b) {
+      b.deleteWhere(_db.reviewLog, (t) => t.cardId.isIn(ids));
+      b.deleteWhere(_db.studyCards, (t) => t.id.isIn(ids));
+    });
+    await _pruneChosenSenses();
   }
 
   Future<void> resetListCards(int listId) async {
@@ -454,17 +822,25 @@ class StudyRepository {
       }
       b.deleteWhere(_db.studyCards, (t) => t.id.isIn(cardIds));
     });
+    await _pruneChosenSenses();
   }
 
+  /// Cards for every word in [listId] — a plain list, or, since a folder's
+  /// subtree is resolved the same way as everywhere else in this class, a
+  /// folder. `EXISTS` rather than a join on `list_items` so a word reachable
+  /// through two different nested lists doesn't yield its card id twice.
   Future<List<int>> _cardIdsForList(int listId) async {
     final rows = await _db.customSelect(
       '''
+      $listSubtreeCte
       SELECT sc.id FROM study_cards sc
-      JOIN list_items li ON li.entry_id = sc.entry_id
-      WHERE li.list_id = ?
+      WHERE EXISTS (
+        SELECT 1 FROM list_items li
+        WHERE li.entry_id = sc.entry_id AND li.list_id IN (SELECT id FROM list_subtree)
+      )
       ''',
       variables: [Variable.withInt(listId)],
-      readsFrom: {_db.studyCards, _db.listItems},
+      readsFrom: {_db.studyCards, _db.listItems, _db.lists},
     ).get();
     return rows.map((r) => r.read<int>('id')).toList();
   }

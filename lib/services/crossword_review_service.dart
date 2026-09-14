@@ -7,6 +7,8 @@ import 'package:flutter/foundation.dart';
 import '../domain/crossword/crossword_models.dart';
 import '../domain/crossword/editorial.dart';
 
+import 'api_key_store.dart';
+
 /// Asks a model to review a finished puzzle — PORTING_SPEC.md §9.3, and the
 /// one place in the whole generator that touches the network.
 ///
@@ -100,13 +102,23 @@ class CrosswordReviewService {
   /// Supplied by `--dart-define-from-file=.env`, and empty otherwise.
   static const String _definedKey = String.fromEnvironment('OPENAI_API_KEY');
 
-  String? get _apiKey {
-    // Belt and braces: even if a release build is handed the define, it does
-    // not call OpenAI directly. A shipping build reviews through [proxyUrl]
-    // or not at all.
+  String? get _apiKey => _keySource?.$1;
+
+  /// The key and where it came from. The source is only ever used in error
+  /// text: a 401 from a key the user pasted into Settings and a 401 from a
+  /// stale `.env` are fixed in different places, and "HTTP 401" alone does
+  /// not say which one was sent.
+  (String, String)? get _keySource {
+    // A key the user pasted into Settings is theirs to spend, in any build
+    // — see ApiKeyStore. The build-time define stays debug-only: even if a
+    // release build is handed it, it does not call OpenAI directly. A
+    // shipping build without a user key goes through [proxyUrl] or not at
+    // all.
+    final userKey = ApiKeyStore.instance.key;
+    if (userKey != null) return (userKey, 'Settings key ${ApiKeyStore.mask(userKey)}');
     if (kReleaseMode) return null;
     final key = _definedKey.trim();
-    return key.isEmpty ? null : key;
+    return key.isEmpty ? null : (key, '.env key ${ApiKeyStore.mask(key)}');
   }
 
   bool get isConfigured => proxyUrl != null || _apiKey != null;
@@ -126,9 +138,11 @@ class CrosswordReviewService {
     CrosswordPuzzle puzzle, {
     required int weekday,
   }) async {
-    final key = _apiKey;
+    final source = _keySource;
+    final key = source?.$1;
     final url = proxyUrl ?? 'https://api.openai.com/v1/chat/completions';
     if (proxyUrl == null && key == null) return _failed('no API key configured');
+    final credential = proxyUrl != null ? 'proxy' : source!.$2;
 
     final payload = <String, Object?>{
       'model': model,
@@ -149,7 +163,8 @@ class CrosswordReviewService {
       // measured a 1,396-second review against a 240-second socket timeout,
       // because each socket operation reset it. `Future.timeout` bounds the
       // whole call in wall-clock time, which is what this needs.
-      final result = await _post(client, url, key, payload).timeout(timeoutFor(puzzle));
+      final result =
+          await _post(client, url, key, payload, credential: credential).timeout(timeoutFor(puzzle));
       return (
         verdict: result.verdict,
         model: model,
@@ -188,8 +203,9 @@ class CrosswordReviewService {
     HttpClient client,
     String url,
     String? key,
-    Map<String, Object?> payload,
-  ) async {
+    Map<String, Object?> payload, {
+    required String credential,
+  }) async {
     final request = await client.postUrl(Uri.parse(url));
     request.headers.contentType = ContentType.json;
     if (key != null) request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
@@ -199,8 +215,16 @@ class CrosswordReviewService {
     final body = await response.transform(utf8.decoder).join();
 
     if (response.statusCode != HttpStatus.ok) {
-      debugPrint('crossword review: HTTP ${response.statusCode}');
-      return _ReviewResponse.failed('HTTP ${response.statusCode}');
+      // OpenAI's error body says *why* — "Incorrect API key provided",
+      // "insufficient_quota" — and masks the key itself, so it is safe to
+      // surface. A 401 also names which credential was sent: that is the
+      // difference between fixing Settings and fixing `.env`.
+      final detail = _errorMessage(body);
+      final error = StringBuffer('HTTP ${response.statusCode}');
+      if (response.statusCode == HttpStatus.unauthorized) error.write(' ($credential rejected)');
+      if (detail.isNotEmpty) error.write(': $detail');
+      debugPrint('crossword review: $error');
+      return _ReviewResponse.failed('$error');
     }
 
     final decoded = jsonDecode(body);
@@ -237,6 +261,20 @@ class CrosswordReviewService {
       reasoningTokens: reasoningTokens,
       error: content == null ? 'no message content in the response' : '',
     );
+  }
+}
+
+/// The `error.message` of an OpenAI error body, or empty if the body isn't
+/// one — a proxy may answer with anything.
+String _errorMessage(String body) {
+  try {
+    final decoded = jsonDecode(body);
+    if (decoded is! Map) return '';
+    final error = decoded['error'];
+    if (error is! Map) return '';
+    return (error['message'] as String?)?.trim() ?? '';
+  } catch (_) {
+    return '';
   }
 }
 

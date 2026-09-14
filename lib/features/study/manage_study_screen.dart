@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
 import '../../domain/models/study_card_summary.dart';
+import '../../domain/models/study_direction.dart';
 import '../../domain/srs/sm2.dart';
 import '../../widgets/pos_tag.dart';
 
@@ -45,6 +46,39 @@ Color _stageColor(BuildContext context, CardStage stage) {
   };
 }
 
+/// Which way round a card is asked, as a badge. A word studied both ways
+/// has two rows in this list — they are separately scheduled cards, and
+/// pausing or resetting one has nothing to do with the other — so the list
+/// has to say which is which.
+class _DirectionBadge extends StatelessWidget {
+  final StudyDirection direction;
+
+  const _DirectionBadge({required this.direction});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: direction.label,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          direction.shortLabel,
+          style: TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w600,
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class ManageStudyScreen extends ConsumerWidget {
   const ManageStudyScreen({super.key});
 
@@ -81,9 +115,11 @@ class ManageStudyScreen extends ConsumerWidget {
                   return ListTile(
                     title: Row(
                       children: [
-                        Text(card.headword),
+                        Flexible(child: Text(card.headword, overflow: TextOverflow.ellipsis)),
                         const SizedBox(width: 8),
                         PosTag(card.pos),
+                        const SizedBox(width: 6),
+                        _DirectionBadge(direction: card.direction),
                       ],
                     ),
                     subtitle: Text(
@@ -160,9 +196,17 @@ class _CardDetailSheet extends ConsumerWidget {
                     children: [
                       Row(
                         children: [
-                          Text(card.headword, style: Theme.of(context).textTheme.titleLarge),
+                          Flexible(
+                            child: Text(
+                              card.headword,
+                              style: Theme.of(context).textTheme.titleLarge,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                           const SizedBox(width: 8),
                           PosTag(card.pos),
+                          const SizedBox(width: 6),
+                          _DirectionBadge(direction: card.direction),
                         ],
                       ),
                       const SizedBox(height: 4),
@@ -179,6 +223,7 @@ class _CardDetailSheet extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 16),
+            _InfoRow(label: 'Asked', value: card.direction.label),
             _InfoRow(label: 'Added', value: _formatDate(card.createdAt)),
             _InfoRow(
               label: 'Due',
@@ -270,12 +315,14 @@ class _CardDetailSheet extends ConsumerWidget {
               child: OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(foregroundColor: scheme.error),
                 icon: const Icon(Icons.delete_outline),
-                label: const Text('Remove from study'),
+                label: const Text('Remove this card'),
                 onPressed: () => _confirmAndRun(
                   context,
-                  title: 'Remove "${card.headword}" from study?',
-                  message: 'This deletes its review history and takes it out of the SRS pool. '
-                      'It stays in any lists it belongs to and can be added back to study later.',
+                  title: 'Remove the ${card.direction.label.toLowerCase()} card?',
+                  message: 'This deletes the review history for "${card.headword}" in this '
+                      'direction only. Its other direction, if you study it both ways, keeps '
+                      'its own schedule. The word stays in any lists it belongs to and can be '
+                      'added back to study later.',
                   confirmLabel: 'Remove',
                   destructive: true,
                   action: () => ref.read(studyRepositoryProvider).removeCard(card.cardId),

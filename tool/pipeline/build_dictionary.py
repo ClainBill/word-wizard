@@ -164,6 +164,27 @@ CREATE VIRTUAL TABLE entries_fts USING fts5(
 );
 """
 
+# Full-text index over example sentences, so the study session's "which
+# sentence wants this word?" game can pick distractors that are *about the
+# same things* as the real sentence instead of three unrelated ones (which a
+# learner can tell apart on topic alone, without knowing the word). Porter
+# stemming so "sailed" finds "sailing"; an external-content table, so the
+# text itself is stored once. Kept out of SCHEMA because it is also applied
+# on its own to an already-built database — see add_examples_fts().
+EXAMPLES_FTS_SQL = """
+CREATE VIRTUAL TABLE IF NOT EXISTS examples_fts USING fts5(
+  text, content='examples', content_rowid='id', tokenize='porter unicode61'
+);
+INSERT INTO examples_fts(examples_fts) VALUES('delete-all');
+INSERT INTO examples_fts(rowid, text) SELECT id, text FROM examples;
+"""
+
+
+def add_examples_fts(conn: sqlite3.Connection) -> None:
+    """Builds (or rebuilds) examples_fts over whatever is in `examples`."""
+    conn.executescript(EXAMPLES_FTS_SQL)
+    conn.commit()
+
 
 def log(msg: str) -> None:
     print(f"[pipeline] {msg}", file=sys.stderr, flush=True)
@@ -334,6 +355,8 @@ def build_full_db(input_path: Path, db_path: Path) -> None:
     log("building FTS5 index...")
     conn.execute("INSERT INTO entries_fts(rowid, headword) SELECT id, headword FROM entries")
     conn.commit()
+    log("building examples FTS5 index...")
+    add_examples_fts(conn)
 
     conn.execute("PRAGMA user_version = 1")
     conn.execute("VACUUM")
@@ -389,6 +412,7 @@ def build_core_db(full_db_path: Path, core_db_path: Path, core_size: int) -> Non
     """)
     conn.execute("INSERT INTO entries_fts(rowid, headword) SELECT id, headword FROM entries")
     conn.commit()
+    add_examples_fts(conn)
     conn.execute("DETACH DATABASE full_db")
     conn.execute("PRAGMA user_version = 1")
     conn.execute("VACUUM")
@@ -408,7 +432,23 @@ def main() -> None:
              "from an existing dictionary-full.db in --out — use this after editing "
              "ADVANCED_VOCAB_SEED or --core-size.",
     )
+    ap.add_argument(
+        "--add-examples-fts", type=Path, metavar="DB",
+        help="Skip every other step and just add (or rebuild) the examples_fts "
+             "index inside an existing database, in place — for upgrading a "
+             "dictionary.db built before the index existed without a full re-parse.",
+    )
     args = ap.parse_args()
+
+    if args.add_examples_fts:
+        if not args.add_examples_fts.exists():
+            sys.exit(f"no such database: {args.add_examples_fts}")
+        log(f"adding examples_fts to {args.add_examples_fts}...")
+        conn = sqlite3.connect(args.add_examples_fts)
+        add_examples_fts(conn)
+        conn.close()
+        log("done.")
+        return
 
     args.out.mkdir(parents=True, exist_ok=True)
     full_db = args.out / "dictionary-full.db"

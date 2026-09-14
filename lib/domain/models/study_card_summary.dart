@@ -1,13 +1,18 @@
 import '../srs/sm2.dart';
+import 'study_direction.dart';
 
 /// One row in the "manage study" browser — a word currently in the SRS
 /// pool, with enough state to show its stage/history at a glance without a
 /// second query per row.
+///
+/// One row **per direction**: a word studied both ways has two of these,
+/// because each direction is separately scheduled and separately reviewed.
 class StudyCardSummary {
   final int cardId;
   final int entryId;
   final String headword;
   final String pos;
+  final StudyDirection direction;
   final DateTime createdAt;
   final DateTime dueAt;
   final bool paused;
@@ -19,6 +24,7 @@ class StudyCardSummary {
     required this.entryId,
     required this.headword,
     required this.pos,
+    required this.direction,
     required this.createdAt,
     required this.dueAt,
     required this.paused,

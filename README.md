@@ -17,8 +17,9 @@ against an offline dictionary generated from an English Wiktionary extract.
 ```
 lib/
   app/          MaterialApp, theming, go_router config, Riverpod providers
-  domain/       Entry/Sense/StudyCard models, the pure SM-2 engine, and the
+  domain/       Entry/Sense/StudyCard models, the pure SM-2 engine, the
                 crossword engine ported from Crosswordler (PORTING_SPEC.md)
+                and the Word Hunt engine ported from StrandinatorResearch/
   data/         drift schemas for dictionary.db (read-only) and user.db,
                 plus the repositories that join them
   features/     one folder per screen (search, entry, lists, study, ...)
@@ -44,7 +45,17 @@ cp out/dictionary-full.db ../../assets/db/dictionary.db
 ```
 
 `out/dictionary-core.db` is a smaller frequency-ranked subset kept for dev
-use; the app itself loads the full database. If you only changed
+use; the app itself loads the full database.
+
+The build also creates `examples_fts`, an FTS5 index over example sentences
+(~60 MB) that the study session's "which sentence wants this word?" game uses
+to pick distractors on the same topic as the real sentence. A `dictionary.db`
+built before that index existed still works (the game falls back to random
+sentences); to add the index without a full re-parse:
+
+```
+python3 build_dictionary.py --add-examples-fts ../../assets/db/dictionary.db
+``` If you only changed
 `ADVANCED_VOCAB_SEED` or `--core-size` and already have
 `out/dictionary-full.db`, skip the slow re-parse with `--core-only`.
 
@@ -83,6 +94,42 @@ Node counts are the first thing to check after touching the solver: §11
 measures 11 / 32 / 115 nodes at the three sizes, and a port taking thousands
 has a bug in propagation or undo however fast it runs. The unit tests assert
 this for 9x9.
+
+## The Word Hunt
+
+The second game is a 4x4 letter board — trace adjacent letters (eight
+directions, no tile twice) to find words. It is a Dart port of the
+`StrandinatorResearch/` engine (milestones 0.3-0.4) and runs entirely
+offline with no model calls:
+
+- **Anchors.** Each board is built around up to two of the user's study words
+  (due cards first) and one word from the day's theme, placed jointly by
+  bounded backtracking. If they won't all fit, the lowest-priority anchor is
+  dropped and the result says so — a board never silently claims a word it
+  couldn't place. Finding a study word shows its definition; it does **not**
+  grade the SRS card, because seeing the letters is not recall.
+- **Answer classes.** *Main* words (familiar: rating ≥ 4, zipf ≥ 2.5) are
+  what completion is measured against — the generator ranks candidate boards
+  toward ~40 of them. *Bonus* words are everything else ENABLE accepts (minus
+  the content list): recognised and counted, never required.
+- **Certified scans.** The chosen board is scanned once by a memoised,
+  budgeted solver that throws rather than truncate, and the complete answer
+  sets are frozen into the puzzle row, so play never consults a dictionary
+  and a lexicon update can't move the goalposts under a saved board.
+- **Themes.** `assets/hunt/themes.tsv` maps ~36 Wiktionary topics (music,
+  law, at sea, …) to familiar words whose *primary* sense carries the topic.
+  One topic per calendar day; every topic word on the board lights up.
+
+Rebuild the three assets (`accepted.txt`, `main.txt`, `themes.tsv`) with:
+
+```
+python3 tool/pipeline/export_hunt_lexicon.py \
+  --kaikki tool/pipeline/raw/kaikki-english.jsonl
+```
+
+Omit `--kaikki` to rebuild just the two word lists in seconds; the topic
+stream over the 3 GB dump takes a few minutes. Open the screen directly on a
+device with `flutter run --dart-define=INITIAL_ROUTE=/games/hunt`.
 
 ## The crossword's editorial pass
 

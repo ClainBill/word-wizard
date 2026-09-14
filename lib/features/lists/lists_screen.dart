@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
 import '../../domain/models/word_list.dart';
+import '../../widgets/confirm_dialog.dart';
 
 final _listsProvider = StreamProvider<List<WordList>>(
   (ref) => ref.watch(listRepositoryProvider).watchLists(),
@@ -19,7 +20,7 @@ class ListsScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Lists')),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _createList(context, ref),
+        onPressed: () => _createTopLevel(context, ref),
         child: const Icon(Icons.add),
       ),
       body: listsAsync.when(
@@ -36,16 +37,45 @@ class ListsScreen extends ConsumerWidget {
                 separatorBuilder: (context, i) => const Divider(height: 1),
                 itemBuilder: (context, i) {
                   final list = lists[i];
-                  return ListTile(
-                    title: Text(list.name),
-                    subtitle: Text('${list.itemCount} words'),
-                    trailing: list.dueCount == 0
-                        ? null
-                        : Chip(
-                            label: Text('${list.dueCount} due'),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                    onTap: () => context.push('/lists/${list.id}', extra: list.name),
+                  return Dismissible(
+                    key: ValueKey(list.id),
+                    direction: DismissDirection.endToStart,
+                    background: Container(
+                      color: Theme.of(context).colorScheme.errorContainer,
+                      alignment: Alignment.centerRight,
+                      padding: const EdgeInsets.only(right: 20),
+                      child: const Icon(Icons.delete_outline),
+                    ),
+                    confirmDismiss: (_) => showConfirmDialog(
+                      context,
+                      title: list.isFolder ? 'Delete this folder?' : 'Delete this list?',
+                      message: list.isFolder
+                          ? 'Deletes this folder and everything inside it — nested lists and '
+                              'folders, and all their words. This can\'t be undone.'
+                          : 'Deletes this list and its words. This can\'t be undone.',
+                      confirmLabel: 'Delete',
+                      destructive: true,
+                    ),
+                    onDismissed: (_) => ref.read(listRepositoryProvider).deleteList(list.id),
+                    child: ListTile(
+                      leading: Icon(list.isFolder ? Icons.folder_outlined : Icons.list_alt_outlined),
+                      title: Text(list.name),
+                      subtitle: Text('${list.itemCount} words'),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (list.dueCount > 0) ...[
+                            Chip(
+                              label: Text('${list.dueCount} due'),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            const SizedBox(width: 4),
+                          ],
+                          if (list.isFolder) const Icon(Icons.chevron_right),
+                        ],
+                      ),
+                      onTap: () => context.push('/lists/${list.id}', extra: list.name),
+                    ),
                   );
                 },
               ),
@@ -55,16 +85,38 @@ class ListsScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _createList(BuildContext context, WidgetRef ref) async {
+  Future<void> _createTopLevel(BuildContext context, WidgetRef ref) async {
+    final choice = await showModalBottomSheet<ListKind>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.list_alt_outlined),
+              title: const Text('New list'),
+              onTap: () => Navigator.of(context).pop(ListKind.custom),
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('New folder'),
+              onTap: () => Navigator.of(context).pop(ListKind.folder),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !context.mounted) return;
+
     final controller = TextEditingController();
     final name = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('New list'),
+        title: Text(choice == ListKind.folder ? 'New folder' : 'New list'),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: 'List name'),
+          decoration: const InputDecoration(hintText: 'Name'),
           onSubmitted: (v) => Navigator.of(context).pop(v),
         ),
         actions: [
@@ -81,6 +133,6 @@ class ListsScreen extends ConsumerWidget {
     );
     final trimmed = name?.trim();
     if (trimmed == null || trimmed.isEmpty) return;
-    await ref.read(listRepositoryProvider).createList(trimmed);
+    await ref.read(listRepositoryProvider).createList(trimmed, kind: choice);
   }
 }

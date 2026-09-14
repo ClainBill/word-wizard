@@ -6,6 +6,8 @@ import '../../app/providers.dart';
 import '../../data/repositories/crossword_repository.dart';
 import '../../domain/crossword/crossword_models.dart';
 import '../../domain/crossword/editorial.dart';
+import '../../domain/models/progress.dart';
+import '../progress/progress_format.dart';
 
 /// Past puzzles for one size, and — **for development** — what the editorial
 /// pass (PORTING_SPEC.md §9.3) did to each of them and what it billed.
@@ -96,9 +98,13 @@ class CrosswordHistoryScreen extends ConsumerWidget {
             return const Center(child: Text('No puzzles yet.'));
           }
           return ListView(
+            padding: const EdgeInsets.only(bottom: 24),
             children: [
-              _ReviewTotalsCard(totals: totalsAsync.valueOrNull),
+              _PlaySummaryCard(difficulty: difficulty),
               for (final entry in entries) _HistoryRow(difficulty: difficulty, entry: entry),
+              // Development-only, so it sits under the puzzles rather than
+              // above them.
+              _ReviewTotalsCard(totals: totalsAsync.valueOrNull),
             ],
           );
         },
@@ -190,11 +196,116 @@ class _ReviewTotalsCard extends ConsumerWidget {
   }
 }
 
+/// How the user has done at this size: solved, clean, fastest, typical.
+class _PlaySummaryCard extends ConsumerWidget {
+  final CrosswordDifficulty difficulty;
+
+  const _PlaySummaryCard({required this.difficulty});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final summary = ref.watch(progressSummaryProvider).valueOrNull;
+    GameDifficultyStats? stats;
+    for (final g in summary?.games ?? const <GameDifficultyStats>[]) {
+      if (g.game == 'crossword' && g.difficulty == difficulty.storageKey) stats = g;
+    }
+    if (stats == null || stats.completed == 0) return const SizedBox.shrink();
+
+    Widget stat(String value, String label) => Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(value,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+              Text(label, style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
+            ],
+          ),
+        );
+
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        child: Row(
+          children: [
+            stat(formatCount(stats.completed), 'solved'),
+            stat(formatCount(stats.clean), 'clean'),
+            stat(stats.best == null ? '—' : formatClock(stats.best!), 'best'),
+            stat(stats.median == null ? '—' : formatClock(stats.median!), 'typical'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A ring that fills as the puzzle does. Done puzzles get a tick, clean
+/// ones in the primary colour; an aided finish is still a finish, just not
+/// one to rank.
+class _FillRing extends StatelessWidget {
+  final CrosswordPlayState play;
+
+  const _FillRing({required this.play});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final done = play.completed;
+    final color = done
+        ? (play.aided ? scheme.secondary : scheme.primary)
+        : play.filledRatio > 0
+            ? scheme.primary
+            : scheme.outlineVariant;
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          CircularProgressIndicator(
+            value: play.filledRatio.clamp(0.0, 1.0),
+            strokeWidth: 4,
+            color: color,
+            backgroundColor: scheme.surfaceContainerHighest,
+            strokeCap: StrokeCap.round,
+          ),
+          if (done)
+            Icon(Icons.check, size: 20, color: color)
+          else if (play.filledRatio > 0)
+            Text(
+              '${(play.filledRatio * 100).floor()}',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _HistoryRow extends StatelessWidget {
   final CrosswordDifficulty difficulty;
   final CrosswordHistoryEntry entry;
 
   const _HistoryRow({required this.difficulty, required this.entry});
+
+  /// One line on how the puzzle went — what a glance at the list should
+  /// answer: finished or not, how far, how long.
+  String _statusLine() {
+    final play = entry.play;
+    final time = play.activeMs == null || play.activeMs == 0
+        ? null
+        : formatClock(Duration(milliseconds: play.activeMs!));
+    if (play.completed) {
+      final how = play.aided ? 'with help' : 'clean';
+      return time == null ? 'Solved · $how' : 'Solved in $time · $how';
+    }
+    if (play.filledRatio == 0 && play.solvedWords == 0) {
+      return time == null ? 'Not started' : 'Opened · $time';
+    }
+    final words = '${play.solvedWords} of ${play.totalWords} words';
+    return time == null ? words : '$words · $time so far';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -216,7 +327,7 @@ class _HistoryRow extends StatelessWidget {
     // exists to remove.
     final title = Row(
       children: [
-        Text(_formatDate(entry.date)),
+        Text(_formatDate(entry.date), style: const TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(width: 8),
         Text(
           _formatTime(entry.generatedAt),
@@ -230,20 +341,23 @@ class _HistoryRow extends StatelessWidget {
         ],
       ],
     );
-    final completed = entry.completed
-        ? Icon(Icons.check_circle, size: 20, color: scheme.primary)
-        : null;
+    final play = entry.play;
+    final subtitle = Text(
+      _statusLine(),
+      style: TextStyle(
+        color: play.completed && !play.aided ? scheme.primary : scheme.onSurfaceVariant,
+      ),
+    );
+    final leading = _FillRing(play: play);
 
     if (entry.reviews.isEmpty) {
       return Column(
         children: [
           ListTile(
+            leading: leading,
             title: title,
-            subtitle: Text(
-              'No AI review',
-              style: TextStyle(color: scheme.onSurfaceVariant),
-            ),
-            trailing: completed,
+            subtitle: subtitle,
+            trailing: Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
             onTap: open,
           ),
           const Divider(height: 1),
@@ -251,32 +365,28 @@ class _HistoryRow extends StatelessWidget {
       );
     }
 
+    // The editorial runs are development detail — a small mark that they
+    // exist, and the rest behind the expansion.
     final latest = entry.reviews.first;
     return Column(
       children: [
         ExpansionTile(
           shape: const Border(),
           collapsedShape: const Border(),
+          leading: leading,
           title: title,
-          subtitle: Text(
-            '${_outcomeStyle(latest.outcome).label} · '
-            '${latest.cluesApplied + latest.wordsApplied}/'
-            '${latest.cluesProposed + latest.wordsProposed} edits · '
-            '${_formatTokens(latest.promptTokens + latest.completionTokens)} tok · '
-            '${_formatCost(latest.costUsd)}'
-            '${entry.reviews.length > 1 ? '  (+${entry.reviews.length - 1} more)' : ''}',
-            style: TextStyle(color: _outcomeStyle(latest.outcome).color(scheme)),
-          ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
+          subtitle: Row(
             children: [
-              ?completed,
-              IconButton(
-                icon: const Icon(Icons.play_arrow_outlined),
-                tooltip: 'Open puzzle',
-                onPressed: open,
-              ),
+              Flexible(child: subtitle),
+              const SizedBox(width: 8),
+              Icon(Icons.auto_fix_high_outlined,
+                  size: 13, color: _outcomeStyle(latest.outcome).color(scheme)),
             ],
+          ),
+          trailing: IconButton(
+            icon: const Icon(Icons.play_arrow_outlined),
+            tooltip: 'Open puzzle',
+            onPressed: open,
           ),
           children: [for (final run in entry.reviews) _RunDetail(run: run)],
         ),

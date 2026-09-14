@@ -3,13 +3,22 @@ import 'package:flutter_tts/flutter_tts.dart';
 
 import '../data/app_databases.dart';
 import '../data/repositories/crossword_repository.dart';
+import '../data/repositories/hunt_repository.dart';
 import '../data/repositories/list_repository.dart';
 import '../data/repositories/notes_repository.dart';
+import '../data/repositories/progress_repository.dart';
+import '../data/repositories/reader_repository.dart';
 import '../data/repositories/search_repository.dart';
 import '../data/repositories/settings_repository.dart';
 import '../data/repositories/study_repository.dart';
 import '../domain/crossword/crossword_models.dart';
+import '../domain/models/progress.dart';
+import '../domain/models/reader_document.dart';
 import '../domain/models/study_dashboard.dart';
+import '../domain/models/study_direction.dart';
+import '../domain/reader/reader_analysis.dart';
+import '../services/api_key_store.dart';
+import '../services/clipboard_service.dart';
 import '../services/notification_service.dart';
 
 /// Overridden with a real, already-opened [AppDatabases] in `main()` before
@@ -42,24 +51,83 @@ final remindersEnabledProvider = StreamProvider<bool>(
   (ref) => ref.watch(settingsRepositoryProvider).watchRemindersEnabled(),
 );
 
+/// The user's own OpenAI key. A ChangeNotifier so Settings (and the
+/// crossword's "AI editor" switch) follow a save or removal immediately.
+final apiKeyStoreProvider = ChangeNotifierProvider<ApiKeyStore>((ref) => ApiKeyStore.instance);
+
 final notificationServiceProvider = Provider<NotificationService>(
   (ref) => NotificationService.instance,
 );
 
+/// Which direction(s) reviews are asked in. Every study query below filters
+/// on it, so changing it in the options sheet re-scopes the due count, the
+/// dashboard and the forecast at once.
+final studyDirectionModeProvider = StreamProvider<StudyDirectionMode>(
+  (ref) => ref.watch(settingsRepositoryProvider).watchStudyDirectionMode(),
+);
+
+/// The synchronous read the study queries need. Falls back to the default
+/// mode for the one frame before the setting's first value arrives from the
+/// database — which is also the correct answer for anyone who has never
+/// changed it.
+final studyDirectionsProvider = Provider<Set<StudyDirection>>((ref) {
+  final mode = ref.watch(studyDirectionModeProvider).valueOrNull ??
+      StudyDirectionMode.defaultMode;
+  return mode.directions;
+});
+
 final dueCountProvider = StreamProvider<int>(
-  (ref) => ref.watch(studyRepositoryProvider).watchDueCount(),
+  (ref) => ref.watch(studyRepositoryProvider).watchDueCount(ref.watch(studyDirectionsProvider)),
 );
 
 final studyStatsProvider = StreamProvider<StudyDashboardStats>(
-  (ref) => ref.watch(studyRepositoryProvider).watchStats(),
+  (ref) => ref.watch(studyRepositoryProvider).watchStats(ref.watch(studyDirectionsProvider)),
 );
 
 final studyForecastProvider = StreamProvider<List<int>>(
-  (ref) => ref.watch(studyRepositoryProvider).watchForecast(),
+  (ref) => ref.watch(studyRepositoryProvider).watchForecast(ref.watch(studyDirectionsProvider)),
 );
 
 final studyStreakProvider = StreamProvider<int>(
   (ref) => ref.watch(studyRepositoryProvider).watchStreak(),
+);
+
+// ---------------------------------------------------------------------------
+// Progress: the bar at the top of the Study tab and the screen behind it.
+// ---------------------------------------------------------------------------
+
+final progressRepositoryProvider = Provider<ProgressRepository>(
+  (ref) => ProgressRepository(ref.watch(appDatabasesProvider).user),
+);
+
+final progressOverviewProvider = StreamProvider<ProgressOverview>(
+  (ref) =>
+      ref.watch(progressRepositoryProvider).watchOverview(ref.watch(studyDirectionsProvider)),
+);
+
+final progressSummaryProvider = StreamProvider.autoDispose<ProgressSummary>(
+  (ref) =>
+      ref.watch(progressRepositoryProvider).watchSummary(ref.watch(studyDirectionsProvider)),
+);
+
+final progressActivityProvider = StreamProvider.autoDispose<List<ActivityDay>>(
+  (ref) => ref.watch(progressRepositoryProvider).watchActivity(),
+);
+
+final recentSearchesProvider = StreamProvider<List<String>>(
+  (ref) => ref.watch(progressRepositoryProvider).watchRecentSearches(),
+);
+
+/// Which of a word's senses its study card carries — `dict.senses` ids,
+/// keyed by canonical entry id. Empty means the default first sense.
+final chosenSensesProvider = StreamProvider.family<Set<int>, int>(
+  (ref, entryId) => ref.watch(studyRepositoryProvider).watchChosenSenses(entryId),
+);
+
+/// Pinned *and* excluded senses for one word — what the entry screen's
+/// meaning rows show.
+final senseChoicesProvider = StreamProvider.family<SenseChoices, int>(
+  (ref, entryId) => ref.watch(studyRepositoryProvider).watchSenseChoices(entryId),
 );
 
 final ttsProvider = Provider<FlutterTts>((ref) {
@@ -68,6 +136,56 @@ final ttsProvider = Provider<FlutterTts>((ref) {
   ref.onDispose(tts.stop);
   return tts;
 });
+
+// ---------------------------------------------------------------------------
+// Reader
+// ---------------------------------------------------------------------------
+
+final readerRepositoryProvider = Provider<ReaderRepository>(
+  (ref) => ReaderRepository(ref.watch(appDatabasesProvider).user),
+);
+
+final clipboardServiceProvider = Provider<ClipboardService>((ref) => ClipboardService());
+
+final readerHistoryProvider = StreamProvider<List<ReaderDocumentSummary>>(
+  (ref) => ref.watch(readerRepositoryProvider).watchHistory(),
+);
+
+/// The document on the page — the most recently opened one.
+final readerCurrentDocumentProvider = StreamProvider<ReaderDocument?>(
+  (ref) => ref.watch(readerRepositoryProvider).watchCurrent(),
+);
+
+/// Every word of one document resolved against the dictionary. Keyed by
+/// content hash as well as id so an edit re-analyzes but a rename doesn't.
+typedef ReaderAnalysisKey = ({int id, String contentHash});
+
+final readerAnalysisProvider =
+    FutureProvider.autoDispose.family<ReaderAnalysis, ReaderAnalysisKey>((ref, key) async {
+  final repo = ref.watch(readerRepositoryProvider);
+  final doc = await repo.getDocument(key.id);
+  if (doc == null) return const ReaderAnalysis([]);
+  return repo.analyze(doc.blocks);
+});
+
+/// Which entries are in lists / under study — the live layer over the
+/// analysis, so a word added from the page lights up at once.
+final readerMarksProvider = StreamProvider<WordMarks>(
+  (ref) => ref.watch(readerRepositoryProvider).watchMarks(),
+);
+
+final readerListIndexProvider = StreamProvider<Map<int, ReaderListInfo>>(
+  (ref) => ref.watch(readerRepositoryProvider).watchListIndex(),
+);
+
+final readerPrefsProvider = StreamProvider<ReaderPrefs>(
+  (ref) => ref.watch(settingsRepositoryProvider).watchReaderPrefs(),
+);
+
+/// Bumped by the nav shell each time the Reader tab is selected. The tab's
+/// screen stays alive in the indexed stack across tab switches, so this is
+/// how it knows to look at the clipboard again.
+final readerTabVisitsProvider = StateProvider<int>((ref) => 0);
 
 final crosswordRepositoryProvider = Provider<CrosswordRepository>(
   (ref) => CrosswordRepository(
@@ -99,8 +217,15 @@ final crosswordPuzzleReviewsProvider =
 );
 
 /// Every day a puzzle's been generated for one difficulty, most recent
-/// first, with the editorial runs against it — backs the history list.
-final crosswordHistoryProvider = FutureProvider.family<List<CrosswordHistoryEntry>, CrosswordDifficulty>(
+/// first, with how far each got and the editorial runs against it — backs
+/// the history list.
+///
+/// `autoDispose`, for the same reason `crosswordSessionProvider` is: a
+/// plain family provider would cache the first visit's list for the life of
+/// the app, so a puzzle finished after that would still show as "3 of 10
+/// words" the next time history was opened.
+final crosswordHistoryProvider =
+    FutureProvider.autoDispose.family<List<CrosswordHistoryEntry>, CrosswordDifficulty>(
   (ref, difficulty) => ref.watch(crosswordRepositoryProvider).history(difficulty),
 );
 
@@ -120,4 +245,27 @@ final crosswordBannedAnswersProvider = FutureProvider<List<CrosswordBannedAnswer
 /// `SettingsRepository.crosswordReviewKey`.
 final crosswordReviewEnabledProvider = StreamProvider<bool>(
   (ref) => ref.watch(settingsRepositoryProvider).watchCrosswordReviewEnabled(),
+);
+
+// ---------------------------------------------------------------------------
+// Word Hunt
+// ---------------------------------------------------------------------------
+
+final huntRepositoryProvider = Provider<HuntRepository>(
+  (ref) => HuntRepository(
+    ref.watch(appDatabasesProvider).user,
+    ref.watch(studyRepositoryProvider),
+  ),
+);
+
+/// Which board to show: null is today's (built on first read), a non-null
+/// id is a past generation opened from history. `autoDispose` for the same
+/// reason as the crossword's — a cached session would go stale under play.
+final huntSessionProvider = FutureProvider.autoDispose.family<HuntSession?, int?>((ref, puzzleId) {
+  final repo = ref.watch(huntRepositoryProvider);
+  return puzzleId == null ? repo.loadOrGenerate() : repo.loadPuzzle(puzzleId);
+});
+
+final huntHistoryProvider = FutureProvider.autoDispose<List<HuntHistoryEntry>>(
+  (ref) => ref.watch(huntRepositoryProvider).history(),
 );

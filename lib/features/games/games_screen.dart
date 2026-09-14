@@ -24,6 +24,15 @@ class GamesScreen extends StatelessWidget {
             _DifficultyTile(difficulty: difficulty),
             const SizedBox(height: 10),
           ],
+          const SizedBox(height: 16),
+          Text('Word Hunt', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 4),
+          Text(
+            'Trace words through a 4×4 board built around your study words and a daily theme.',
+            style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 16),
+          const _HuntTile(),
         ],
       ),
     );
@@ -52,6 +61,28 @@ class _DifficultyTile extends StatelessWidget {
         ),
         title: Text(difficulty.label),
         subtitle: Text('${difficulty.size}×${difficulty.size}'),
+        trailing: const Icon(Icons.chevron_right),
+      ),
+    );
+  }
+}
+
+class _HuntTile extends StatelessWidget {
+  const _HuntTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        onTap: () => context.push('/games/hunt'),
+        leading: CircleAvatar(
+          backgroundColor: scheme.secondaryContainer,
+          child: Icon(Icons.grid_view_rounded, color: scheme.onSecondaryContainer),
+        ),
+        title: const Text('Daily board'),
+        subtitle: const Text('4×4 · new theme every day'),
         trailing: const Icon(Icons.chevron_right),
       ),
     );

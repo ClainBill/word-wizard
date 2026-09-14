@@ -116,6 +116,13 @@ your rate limit and your terms of service. The app calls **your** backend; your
 backend calls OpenAI. A subscription already needs a backend for entitlement
 checks, so this is close to free.
 
+**The user's own key is a different matter.** Settings → AI features lets the
+user paste their own OpenAI key (`lib/services/api_key_store.dart`). It is
+theirs, on their device, in the platform keystore, and spent on their account;
+the rule above is about a key *shared by every install*. Precedence in both
+services: `proxyUrl` → the user's key (any build) → the `--dart-define` key
+(debug builds only).
+
 ### Never block play on it
 
 Measured, `gpt-5-mini` at `reasoning_effort: low`:
