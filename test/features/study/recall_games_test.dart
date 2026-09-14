@@ -73,6 +73,22 @@ void main() {
       expect(availableGames(present, RecallTarget.word), contains(RecallGameKind.cloze));
     });
 
+    test('an example that gives the word away in another form is not quizzed on', () {
+      final leaky = _card(
+        headword: 'thunder',
+        gloss: 'a loud rumbling noise',
+        example: 'The train thundered along the tracks as the thunder shook the house.',
+      );
+      expect(availableGames(leaky, RecallTarget.word), isNot(contains(RecallGameKind.cloze)));
+      expect(availableGames(leaky, RecallTarget.meaning), isNot(contains(RecallGameKind.sentenceFit)));
+    });
+
+    test('a fragment that means nothing with a gap in it is not quizzed on', () {
+      final fragment = _card(headword: 'tan', gloss: 'a yellowish-brown colour', example: 'a tan suit');
+      expect(availableGames(fragment, RecallTarget.word), isNot(contains(RecallGameKind.cloze)));
+      expect(availableGames(fragment, RecallTarget.meaning), isNot(contains(RecallGameKind.sentenceFit)));
+    });
+
     test('a paragraph-long citation is not offered as a few-seconds game', () {
       final wall = _card(
         headword: 'serendipity',

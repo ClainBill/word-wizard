@@ -56,6 +56,7 @@ class SearchRepository {
     if (similar.length >= count) return similar;
     final random = await _db.randomBlankedExamples(
       excludeEntryId: excludeEntryId,
+      excludeHeadword: headword,
       count: count - similar.length + 2,
     );
     return [...similar, ...random.where((r) => !similar.contains(r))].take(count).toList();

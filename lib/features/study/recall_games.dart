@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
 import '../../domain/models/study_card.dart';
+import '../../domain/study/quiz_example.dart';
 import '../../services/feature_clues_service.dart';
 
 /// Which half of a card a mini-game makes you produce.
@@ -94,11 +95,6 @@ enum RecallGameKind {
 
 final _pureAlpha = RegExp(r"^[A-Za-z][A-Za-z'\- ]*$");
 
-// Wiktionary examples range from a short invented sentence to a full quoted
-// paragraph (seen live on "serendipity": Horace Walpole's ~1300-character
-// coinage letter) — fine as a citation, unusable as a few-seconds game.
-const _maxExampleLength = 200;
-
 // A definition long enough to need scrolling isn't a puzzle, it's reading.
 const _maxBuildableGloss = 120;
 
@@ -129,14 +125,14 @@ bool _isAvailable(RecallGameKind kind, StudyCard card) {
 }
 
 /// The pattern that finds [card]'s headword inside its own example sentence,
-/// or null when there's no example, it's too long to read at a glance, or
-/// the word doesn't literally appear in it (a surprising number of
-/// Wiktionary examples illustrate an inflected form the regex won't match).
+/// or null when the example can't carry a gap game — see [isQuizExample]:
+/// no example, not a real sentence, too long to read at a glance, the word
+/// not literally in it, or the word given away by an inflected form left
+/// standing next to the gap ("thundered" beside a blank for "thunder").
 RegExp? clozePattern(StudyCard card) {
-  final example = card.example?.trim();
-  if (example == null || example.isEmpty || example.length > _maxExampleLength) return null;
-  final pattern = RegExp(r'\b' + RegExp.escape(card.headword.trim()) + r'\b', caseSensitive: false);
-  return pattern.hasMatch(example) ? pattern : null;
+  final example = card.example;
+  if (example == null || !isQuizExample(card.headword, example)) return null;
+  return headwordPattern(card.headword);
 }
 
 /// Splits a definition into 3–5 tappable chips for [RecallGameKind.
@@ -895,8 +891,7 @@ class _SentenceFitGameState extends ConsumerState<_SentenceFitGame> {
   @override
   void initState() {
     super.initState();
-    final pattern = clozePattern(widget.card)!;
-    _answer = widget.card.example!.trim().replaceAll(pattern, '_____');
+    _answer = blankHeadword(widget.card.headword, widget.card.example!);
     ref
         .read(searchRepositoryProvider)
         .similarDistractorExamples(

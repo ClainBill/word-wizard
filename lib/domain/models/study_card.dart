@@ -1,4 +1,6 @@
 import '../srs/sm2.dart';
+import '../study/quiz_example.dart';
+import 'entry.dart';
 import 'study_direction.dart';
 
 /// One dictionary sense the user chose to carry on a word's study card.
@@ -11,9 +13,22 @@ class StudySense {
   /// under a sibling POS of the same headword ("muse" the verb on a card
   /// filed as a noun).
   final String pos;
-  final String? example;
 
-  const StudySense({required this.senseId, required this.gloss, required this.pos, this.example});
+  /// The sense's example sentences in dictionary order, citations included
+  /// — all of them, because the first one is often a fragment or a period
+  /// quote that can't carry a recall game, and the card wants the pick of
+  /// the lot (see [pickQuizExample]).
+  final List<Example> examples;
+
+  const StudySense({
+    required this.senseId,
+    required this.gloss,
+    required this.pos,
+    this.examples = const [],
+  });
+
+  /// The sense's first example, as the card's back shows it under the gloss.
+  String? get example => examples.firstOrNull?.text;
 }
 
 /// A study card joined with the headword/gloss it's studying — everything
@@ -29,6 +44,14 @@ class StudyCard {
   /// reads a single gloss (the recall games, the reminder notification)
   /// follows whatever the card was dealt without knowing about it.
   final String? gloss;
+
+  /// The example sentence the card shows and the recall games quiz on.
+  /// Once the card has its [senses], this is the first of their examples
+  /// that [isQuizExample] accepts — a real sentence with the headword in
+  /// it and nothing else that gives the word away — falling back to the
+  /// first example of any kind, so the card's back still has a citation to
+  /// show. Whether a game may use it is re-checked at the game, not
+  /// assumed from the slot.
   final String? example;
   final String? note;
 
@@ -75,13 +98,16 @@ class StudyCard {
     ];
   }
 
-  /// The same card carrying [chosen] as its [senses], with [gloss] and
-  /// [example] re-pointed at the first of them. An empty list leaves the
-  /// card exactly as it was.
+  /// The same card carrying [chosen] as its [senses], with [gloss]
+  /// re-pointed at the first of them and [example] at the best quizzable
+  /// one across all of them. An empty list leaves the card exactly as it
+  /// was.
   StudyCard withSenses(List<StudySense> chosen) {
     if (chosen.isEmpty) return this;
     final first = chosen.first;
-    final firstExample = chosen.map((s) => s.example).whereType<String>().firstOrNull;
+    final examples = chosen.expand((s) => s.examples);
+    final quizExample = pickQuizExample(headword, examples)?.text;
+    final firstExample = quizExample ?? examples.firstOrNull?.text;
     return StudyCard(
       cardId: cardId,
       entryId: entryId,

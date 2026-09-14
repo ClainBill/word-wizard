@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:drift/drift.dart';
 
+import '../../domain/models/entry.dart';
 import '../../domain/models/reminder_word.dart';
 import '../../domain/models/study_card.dart';
 import '../../domain/models/study_card_summary.dart';
@@ -277,11 +278,10 @@ class StudyRepository {
     final placeholders = entryIds.map((_) => '?').join(',');
     final variables = entryIds.map(Variable.withInt).toList();
 
-    final pinned = _groupSenses(await _db
+    final pinnedRows = await _db
         .customSelect(
           '''
-          SELECT ss.entry_id, s.id AS sense_id, s.gloss, e.pos,
-            (SELECT x.text FROM dict.examples x WHERE x.sense_id = s.id ORDER BY x.id LIMIT 1) AS example
+          SELECT ss.entry_id, s.id AS sense_id, s.gloss, e.pos
           FROM study_senses ss
           JOIN dict.senses s ON s.id = ss.sense_id
           JOIN dict.entries e ON e.id = s.entry_id
@@ -291,7 +291,8 @@ class StudyRepository {
           variables: variables,
           readsFrom: {_db.studySenses},
         )
-        .get());
+        .get();
+    final pinned = _groupSenses(pinnedRows, await _examplesFor(pinnedRows));
 
     final unpinnedIds = entryIds.where((id) => !pinned.containsKey(id)).toList();
     final drawn = <int, List<StudySense>>{};
@@ -303,7 +304,6 @@ class StudyRepository {
           .customSelect(
             '''
             SELECT ce.id AS entry_id, s.id AS sense_id, s.gloss, e.pos,
-              (SELECT x.text FROM dict.examples x WHERE x.sense_id = s.id ORDER BY x.id LIMIT 1) AS example,
               EXISTS(SELECT 1 FROM study_senses ss
                      WHERE ss.entry_id = ce.id AND ss.sense_id = s.id AND ss.excluded = 1) AS excluded
             FROM dict.entries ce
@@ -316,8 +316,9 @@ class StudyRepository {
             readsFrom: {_db.studyCards, _db.studySenses},
           )
           .get();
-      final all = _groupSenses(rows);
-      final allowed = _groupSenses([for (final r in rows) if (r.read<int>('excluded') == 0) r]);
+      final examples = await _examplesFor(rows);
+      final all = _groupSenses(rows, examples);
+      final allowed = _groupSenses([for (final r in rows) if (r.read<int>('excluded') == 0) r], examples);
       // A word with every meaning excluded still needs something on its
       // card — the exclusions are ignored rather than the card left blank.
       all.forEach((entryId, senses) {
@@ -329,14 +330,38 @@ class StudyRepository {
     return [for (final c in cards) c.withSenses(pinned[c.entryId] ?? drawn[c.entryId] ?? const [])];
   }
 
-  Map<int, List<StudySense>> _groupSenses(List<QueryRow> rows) {
+  /// Every example of every sense in [senseRows], keyed by sense id and in
+  /// dictionary order. All of them rather than the first: the card picks
+  /// the one that can carry a recall game (see [StudyCard.example]), and
+  /// the first is often a fragment or a period quote that can't.
+  Future<Map<int, List<Example>>> _examplesFor(List<QueryRow> senseRows) async {
+    final senseIds = senseRows.map((r) => r.read<int>('sense_id')).toSet().toList();
+    if (senseIds.isEmpty) return const {};
+    final placeholders = senseIds.map((_) => '?').join(',');
+    final rows = await _db.customSelect(
+      'SELECT id, sense_id, text, source FROM dict.examples WHERE sense_id IN ($placeholders) ORDER BY id',
+      variables: senseIds.map(Variable.withInt).toList(),
+    ).get();
+    final bySense = <int, List<Example>>{};
+    for (final r in rows) {
+      bySense.putIfAbsent(r.read<int>('sense_id'), () => []).add(Example(
+            id: r.read<int>('id'),
+            text: r.read<String>('text'),
+            source: r.readNullable<String>('source'),
+          ));
+    }
+    return bySense;
+  }
+
+  Map<int, List<StudySense>> _groupSenses(List<QueryRow> rows, Map<int, List<Example>> examples) {
     final byEntry = <int, List<StudySense>>{};
     for (final r in rows) {
+      final senseId = r.read<int>('sense_id');
       byEntry.putIfAbsent(r.read<int>('entry_id'), () => []).add(StudySense(
-            senseId: r.read<int>('sense_id'),
+            senseId: senseId,
             gloss: r.read<String>('gloss'),
             pos: r.read<String>('pos'),
-            example: r.readNullable<String>('example'),
+            examples: examples[senseId] ?? const [],
           ));
     }
     return byEntry;

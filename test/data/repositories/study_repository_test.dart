@@ -38,7 +38,7 @@ void main() {
       'CREATE TABLE dict.senses (id INTEGER PRIMARY KEY, entry_id INTEGER, sense_order INTEGER, gloss TEXT)',
     );
     await db.customStatement(
-      'CREATE TABLE dict.examples (id INTEGER PRIMARY KEY, sense_id INTEGER, text TEXT)',
+      'CREATE TABLE dict.examples (id INTEGER PRIMARY KEY, sense_id INTEGER, text TEXT, source TEXT)',
     );
   });
 
@@ -142,13 +142,21 @@ void main() {
   });
 
   group('chosen senses', () {
-    Future<void> seedSense(int id, int entryId, int order, String gloss, {String? example}) async {
+    Future<void> seedSense(
+      int id,
+      int entryId,
+      int order,
+      String gloss, {
+      String? example,
+      List<String> examples = const [],
+    }) async {
       await db.customStatement(
         "INSERT INTO dict.senses (id, entry_id, sense_order, gloss) VALUES ($id, $entryId, $order, '$gloss')",
       );
-      if (example != null) {
+      final all = [?example, ...examples];
+      for (var i = 0; i < all.length; i++) {
         await db.customStatement(
-          "INSERT INTO dict.examples (id, sense_id, text) VALUES ($id * 10, $id, '$example')",
+          "INSERT INTO dict.examples (id, sense_id, text) VALUES (${id * 10 + i}, $id, '${all[i]}')",
         );
       }
     }
@@ -217,6 +225,41 @@ void main() {
       expect(card.gloss, 'to ponder');
       expect(card.example, 'she mused on it');
       expect(card.senses.single.pos, 'verb');
+    });
+
+    test('the card quizzes on a real sentence, not whichever example comes first', () async {
+      await seedEntry(1, 'thunder');
+      await seedSense(
+        11,
+        1,
+        0,
+        'a loud rumbling noise',
+        examples: [
+          // A fragment, then one that gives the word away through an
+          // inflection, then a sentence the cloze game can actually use.
+          'a clap of thunder',
+          'The train thundered along the tracks; the thunder shook the house.',
+          'The thunder rolled across the valley all night long.',
+        ],
+      );
+      await studyRepo.ensureCard(1, _w2m);
+
+      final card = (await studyRepo.dueQueue(directions: _w2m)).single;
+
+      expect(card.example, 'The thunder rolled across the valley all night long.');
+      // The card's back still lists the sense's own first example.
+      expect(card.senses.single.example, 'a clap of thunder');
+      expect(card.senses.single.examples, hasLength(3));
+    });
+
+    test('with no quizzable example the card falls back to the first one', () async {
+      await seedMuse();
+      await studyRepo.ensureCard(1, _w2m);
+      await studyRepo.setChosenSenses(1, {11});
+
+      final card = (await studyRepo.dueQueue(directions: _w2m)).single;
+
+      expect(card.example, 'his muse');
     });
 
     test('several chosen senses come back in dictionary order, canonical entry first', () async {

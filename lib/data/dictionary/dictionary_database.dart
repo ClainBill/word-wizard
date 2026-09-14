@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../domain/models/entry.dart';
+import '../../domain/study/quiz_example.dart';
 
 part 'dictionary_database.g.dart';
 
@@ -60,26 +61,6 @@ class DictionaryDatabase extends _$DictionaryDatabase {
   ]..sort((a, b) => b.length.compareTo(a.length)); // longest first
 
   static String _capitalize(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
-
-  // Wiktionary's `source` citation for a quoted example starts with the
-  // work's year ("1886 October – 1887 January, H. Rider Haggard, She: […]",
-  // "1650, Thomas Browne, […]"), optionally prefixed "c." or "a." for an
-  // approximate/uncertain date ("c. 1599–1602 (date written), William
-  // Shakespeare, […]"). Checked against the real dictionary: citations that
-  // don't match this leading-year shape are overwhelmingly pre-1900
-  // (Shakespeare, King James Bible, medieval poetry) — old enough that the
-  // vocabulary/syntax reads as nonsensical rather than illustrative to a
-  // modern solver — so an unparseable citation is treated the same as an
-  // old one. A `null` source (an invented, uncited example — about 80% of
-  // the bundled dictionary's examples) is assumed modern.
-  static final _sourceYear = RegExp(r'^(?:c\.\s*|a\.\s*)?(\d{4})');
-  static const _minModernExampleYear = 1970;
-  static bool _isModernExample(String? source) {
-    if (source == null) return true;
-    final match = _sourceYear.firstMatch(source);
-    if (match == null) return false;
-    return int.parse(match.group(1)!) >= _minModernExampleYear;
-  }
 
   /// True if [clue] restates [answer] outright — an exact word match, or a
   /// word that is [answer] plus a common suffix (catches inflections a raw
@@ -385,11 +366,17 @@ class DictionaryDatabase extends _$DictionaryDatabase {
   /// Same random-rowid sampling trick as [randomGlosses], and for the same
   /// reason: `ORDER BY RANDOM()` over the examples table is a full-table
   /// sort, measured in seconds. Oversampled hard here because most candidate
-  /// rows get thrown away — a usable one has to be short, be a modern
-  /// citation, and actually contain its own headword as a whole word so
-  /// there is something to blank.
+  /// rows get thrown away — a usable one has to pass [isQuizExample] for
+  /// its own headword (a real, modern sentence with the word in it and no
+  /// inflected form left standing beside the gap) and be short enough to
+  /// sit three to a screen.
+  ///
+  /// [excludeHeadword], when given, is the word the game is really about:
+  /// a distractor whose gap could take that word — or which mentions it in
+  /// any form — is not a wrong answer.
   Future<List<String>> randomBlankedExamples({
     required int excludeEntryId,
+    String? excludeHeadword,
     int count = 2,
     int maxLength = 120,
   }) async {
@@ -424,13 +411,12 @@ class DictionaryDatabase extends _$DictionaryDatabase {
     for (final row in rows) {
       if (result.length >= count) break;
       if (row.read<int>('entry_id') == excludeEntryId) continue;
-      if (!_isModernExample(row.readNullable<String>('source'))) continue;
       final text = row.read<String>('text').trim();
-      if (text.length < 20 || text.length > maxLength) continue;
+      if (text.length > maxLength) continue;
       final headword = row.read<String>('headword');
-      final pattern = RegExp(r'\b' + RegExp.escape(headword) + r'\b', caseSensitive: false);
-      if (!pattern.hasMatch(text)) continue;
-      result.add(text.replaceAll(pattern, '_____'));
+      if (!isQuizExample(headword, text, source: row.readNullable<String>('source'))) continue;
+      if (excludeHeadword != null && giveawayPattern(excludeHeadword).hasMatch(text)) continue;
+      result.add(blankHeadword(headword, text));
     }
     return result;
   }
@@ -464,8 +450,10 @@ class DictionaryDatabase extends _$DictionaryDatabase {
   /// "which sentence wants this word?" game can't be won on topic alone.
   ///
   /// Rows from the same entry are skipped, and so is anything that wouldn't
-  /// pass [randomBlankedExamples]'s own filters. Returns fewer than [count]
-  /// when the index turns up nothing usable; the caller tops up at random.
+  /// pass [randomBlankedExamples]'s own filters — including any sentence
+  /// that mentions [excludeHeadword] in any form. Returns fewer than
+  /// [count] when the index turns up nothing usable; the caller tops up at
+  /// random.
   Future<List<String>> similarBlankedExamples(
     String text, {
     required int excludeEntryId,
@@ -504,25 +492,21 @@ class DictionaryDatabase extends _$DictionaryDatabase {
 
     final result = <String>[];
     final usedEntries = <int>{excludeEntryId};
+    final target = giveawayPattern(excludeHeadword);
     for (final row in rows) {
       if (result.length >= count) break;
       final entryId = row.read<int>('entry_id');
       if (usedEntries.contains(entryId)) continue;
-      if (!_isModernExample(row.readNullable<String>('source'))) continue;
       final candidate = row.read<String>('text').trim();
-      if (candidate.length < 20 || candidate.length > maxLength) continue;
+      if (candidate.length > maxLength) continue;
       if (candidate == text.trim()) continue;
       final headword = row.read<String>('headword');
+      if (!isQuizExample(headword, candidate, source: row.readNullable<String>('source'))) continue;
       // A distractor whose blank could take *our* word is not a wrong
-      // answer, so the target headword must not appear in it either.
-      if (RegExp(r'\b' + RegExp.escape(excludeHeadword) + r'\b', caseSensitive: false)
-          .hasMatch(candidate)) {
-        continue;
-      }
-      final pattern = RegExp(r'\b' + RegExp.escape(headword) + r'\b', caseSensitive: false);
-      if (!pattern.hasMatch(candidate)) continue;
+      // answer, so the target must not appear in it in any form.
+      if (target.hasMatch(candidate)) continue;
       usedEntries.add(entryId);
-      result.add(candidate.replaceAll(pattern, '_____'));
+      result.add(blankHeadword(headword, candidate));
     }
     return result;
   }
@@ -555,7 +539,7 @@ class DictionaryDatabase extends _$DictionaryDatabase {
         variables: senseIds.map(Variable.withInt).toList(),
       ).get();
       for (final r in exampleRows) {
-        if (!_isModernExample(r.readNullable<String>('source'))) continue;
+        if (!isModernCitation(r.readNullable<String>('source'))) continue;
         examplesBySense.putIfAbsent(r.read<int>('sense_id'), () => []).add(r.read<String>('text'));
       }
     }
@@ -588,7 +572,7 @@ class DictionaryDatabase extends _$DictionaryDatabase {
         }
       }
 
-      final wordPattern = RegExp(r'\b' + RegExp.escape(headword) + r'\b', caseSensitive: false);
+      final wordPattern = headwordPattern(headword);
       for (final example in examplesBySense[row.read<int>('id')] ?? const <String>[]) {
         // Wiktionary examples range from a short invented sentence to a full
         // quoted paragraph from a novel (seen in the bundled data: a
@@ -597,7 +581,10 @@ class DictionaryDatabase extends _$DictionaryDatabase {
         // needs to fit on one line like every other clue style here.
         if (example.length > maxClueLength) continue;
         if (!wordPattern.hasMatch(example)) continue;
-        options.add(example.replaceAll(wordPattern, '_____'));
+        // "The train _____ along the tracks, thundering…" — an inflected
+        // form left beside the gap hands the solver the answer.
+        if (leaksHeadword(headword, example)) continue;
+        options.add(blankHeadword(headword, example));
       }
     }
     longOptions.forEach((entryId, clues) {
