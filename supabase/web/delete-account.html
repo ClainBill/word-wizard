@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delete your Lexery account</title>
+<!--
+  Google Play requires a way to request account deletion from outside the
+  app. Host this page at a public URL (the Play listing links to it) and
+  fill in the two values below from the production Supabase project.
+-->
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; color: #222; }
+  label { display: block; margin-top: 1rem; font-weight: 600; }
+  input, textarea { width: 100%; padding: .6rem; font: inherit; box-sizing: border-box; }
+  button { margin-top: 1rem; padding: .7rem 1.2rem; font: inherit; }
+  .note { color: #555; font-size: .95rem; }
+  #done, #fail { display: none; margin-top: 1rem; }
+</style>
+</head>
+<body>
+<h1>Delete your Lexery account</h1>
+<p><strong>The quickest way is in the app:</strong> Settings → Account → <em>Delete account</em>. That removes your account immediately.</p>
+<p>If you no longer have the app, request deletion here. We'll confirm with the address you enter, then delete the account and everything stored with it — your profile, subscription record and AI usage history. Everything you studied lives on your device and goes when you uninstall the app.</p>
+<p class="note">Deleting your account does <strong>not</strong> cancel an App Store or Google Play subscription. Cancel that in your store's subscription settings, or it will keep renewing.</p>
+<form id="form">
+  <label for="email">Email address of the account</label>
+  <input id="email" name="email" type="email" required autocomplete="email">
+  <label for="note">Anything we should know (optional)</label>
+  <textarea id="note" name="note" rows="3"></textarea>
+  <button type="submit">Request deletion</button>
+</form>
+<p id="done">Thanks — we've received your request and will email you to confirm before deleting the account.</p>
+<p id="fail">That didn't go through. Please email <a href="mailto:willcharlesgill@gmail.com">willcharlesgill@gmail.com</a> instead.</p>
+<script>
+  // Fill in from the production project: Settings → API.
+  const SUPABASE_URL = "https://YOUR-PROJECT-REF.supabase.co";
+  const SUPABASE_ANON_KEY = "YOUR-ANON-KEY";
+
+  document.getElementById("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      email: document.getElementById("email").value,
+      note: document.getElementById("note").value,
+    };
+    try {
+      const r = await fetch(`${SUPABASE_URL}/functions/v1/delete-account`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_ANON_KEY,
+          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify(body),
+      });
+      const ok = r.ok && (await r.json()).ok;
+      document.getElementById("form").style.display = ok ? "none" : "";
+      document.getElementById(ok ? "done" : "fail").style.display = "block";
+    } catch {
+      document.getElementById("fail").style.display = "block";
+    }
+  });
+</script>
+</body>
+</html>

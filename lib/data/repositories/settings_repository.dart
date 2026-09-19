@@ -1,3 +1,5 @@
+import 'package:flutter/material.dart' show ThemeMode;
+
 import '../../domain/models/study_direction.dart';
 import '../user/user_database.dart';
 
@@ -12,12 +14,50 @@ class ReaderPrefs {
   });
 }
 
+/// A text-to-speech voice as flutter_tts identifies one: the pair of
+/// fields `setVoice` takes. See [SettingsRepository.ttsVoiceKey].
+class TtsVoiceChoice {
+  final String name;
+  final String locale;
+
+  const TtsVoiceChoice({required this.name, required this.locale});
+
+  static TtsVoiceChoice? parse(String? stored) {
+    if (stored == null) return null;
+    final cut = stored.lastIndexOf('|');
+    if (cut <= 0) return null;
+    return TtsVoiceChoice(name: stored.substring(0, cut), locale: stored.substring(cut + 1));
+  }
+
+  String get storageValue => '$name|$locale';
+
+  @override
+  bool operator ==(Object other) =>
+      other is TtsVoiceChoice && other.name == name && other.locale == locale;
+
+  @override
+  int get hashCode => Object.hash(name, locale);
+}
+
 class SettingsRepository {
   final UserDatabase _db;
 
   SettingsRepository(this._db);
 
   static const remindersKey = 'daily_reminders_enabled';
+
+  /// The morning word-of-the-day notification. Like reminders, on unless
+  /// an explicit 'false' row says otherwise.
+  static const wordOfTheDayKey = 'word_of_the_day_notification_enabled';
+
+  /// Light, dark, or follow the system. Absent means system, which is how
+  /// the app behaved before the setting existed.
+  static const themeModeKey = 'theme_mode';
+
+  /// The pronunciation voice, as `name|locale` — the two fields flutter_tts
+  /// needs to select it again. Absent means the device's default English
+  /// voice.
+  static const ttsVoiceKey = 'tts_voice';
 
   /// Which direction(s) SRS reviews are asked in — see
   /// [StudyDirectionMode]. Absent (or unrecognised) means
@@ -41,9 +81,54 @@ class SettingsRepository {
         .map((row) => row?.value != 'false');
   }
 
+  Stream<bool> watchWordOfTheDayEnabled() {
+    return (_db.select(_db.settings)..where((t) => t.key.equals(wordOfTheDayKey)))
+        .watchSingleOrNull()
+        .map((row) => row?.value != 'false');
+  }
+
+  Future<void> setWordOfTheDayEnabled(bool enabled) {
+    return _db.into(_db.settings).insertOnConflictUpdate(
+          SettingsCompanion.insert(key: wordOfTheDayKey, value: enabled.toString()),
+        );
+  }
+
   Future<void> setRemindersEnabled(bool enabled) {
     return _db.into(_db.settings).insertOnConflictUpdate(
           SettingsCompanion.insert(key: remindersKey, value: enabled.toString()),
+        );
+  }
+
+  Stream<ThemeMode> watchThemeMode() {
+    return (_db.select(_db.settings)..where((t) => t.key.equals(themeModeKey)))
+        .watchSingleOrNull()
+        .map((row) => switch (row?.value) {
+              'light' => ThemeMode.light,
+              'dark' => ThemeMode.dark,
+              _ => ThemeMode.system,
+            });
+  }
+
+  Future<void> setThemeMode(ThemeMode mode) {
+    return _db.into(_db.settings).insertOnConflictUpdate(
+          SettingsCompanion.insert(key: themeModeKey, value: mode.name),
+        );
+  }
+
+  Stream<TtsVoiceChoice?> watchTtsVoice() {
+    return (_db.select(_db.settings)..where((t) => t.key.equals(ttsVoiceKey)))
+        .watchSingleOrNull()
+        .map((row) => TtsVoiceChoice.parse(row?.value));
+  }
+
+  /// Null clears the choice back to the device default.
+  Future<void> setTtsVoice(TtsVoiceChoice? voice) async {
+    if (voice == null) {
+      await (_db.delete(_db.settings)..where((t) => t.key.equals(ttsVoiceKey))).go();
+      return;
+    }
+    await _db.into(_db.settings).insertOnConflictUpdate(
+          SettingsCompanion.insert(key: ttsVoiceKey, value: voice.storageValue),
         );
   }
 

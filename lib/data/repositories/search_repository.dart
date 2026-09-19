@@ -1,3 +1,4 @@
+import '../../domain/models/daily_word.dart';
 import '../../domain/models/entry.dart';
 import '../dictionary/dictionary_database.dart';
 
@@ -9,6 +10,9 @@ class SearchRepository {
   Future<List<EntrySummary>> search(String query) => _db.search(query);
 
   Future<WordEntry?> loadWord(String headword) => _db.loadWord(headword);
+
+  /// The featured word for [day] — see `DictionaryDatabase.wordOfTheDay`.
+  Future<DailyWord?> wordOfTheDay(DateTime day) => _db.wordOfTheDay(day);
 
   /// Resolves a single word tapped inside a gloss, example, or etymology
   /// line to its full entry — tries the exact headword first, then falls

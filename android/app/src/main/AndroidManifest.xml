@@ -4,13 +4,15 @@
          their own manifests; without it here a release build fails every
          call with "no connection to host". Everything else is offline. -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <!-- Daily word-reminder notifications -->
+    <!-- Daily word-reminder notifications. They fire at random times of
+         day, so they are scheduled inexactly: Play policy reserves exact
+         alarms for alarm-clock and calendar apps, and a reminder that lands
+         within a few minutes of its slot is no worse. BOOT_COMPLETED lets
+         the plugin's receiver re-register pending reminders after a reboot. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <application
-        android:label="Word Wizard"
+        android:label="Lexery"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -30,9 +32,22 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- Deep links are handled by supabase_flutter (app_links), not
+                 by the router: the sign-in link must complete the session
+                 without navigating anywhere. Left on, Flutter also hands
+                 the URL to go_router, which has no such route. -->
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="false" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- Sign-in links from the account email open the app
+                 (lexery://auth); supabase_flutter completes the session. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="lexery" android:host="auth"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

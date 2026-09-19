@@ -107,6 +107,7 @@ class WordBody extends ConsumerWidget {
           ],
         ),
         IpaLabel(word.pronunciation.ipa),
+        _SpellingsLine(word),
         const SizedBox(height: 16),
         Row(
           children: [
@@ -122,7 +123,7 @@ class WordBody extends ConsumerWidget {
               child: studyingAsync.when(
                 data: (studying) => FilledButton.icon(
                   icon: Icon(studying ? Icons.check : Icons.add),
-                  label: Text(studying ? 'Studying' : 'Study'),
+                  label: Text(studying ? 'In Lexery' : 'Add to Lexery'),
                   onPressed: studying
                       ? null
                       : () async {
@@ -134,7 +135,7 @@ class WordBody extends ConsumerWidget {
                         },
                 ),
                 loading: () => const FilledButton(onPressed: null, child: Text('…')),
-                error: (error, stack) => const FilledButton(onPressed: null, child: Text('Study')),
+                error: (error, stack) => const FilledButton(onPressed: null, child: Text('Add to Lexery')),
               ),
             ),
           ],
@@ -629,6 +630,65 @@ class _NotesEditorState extends ConsumerState<_NotesEditor> {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// The word's other spellings — "Also spelled colour (Commonwealth and
+/// Ireland)" — and, when the card was reached by one of them, which. One
+/// card per word, whichever way it's written (see [SpellingVariant]).
+class _SpellingsLine extends StatelessWidget {
+  final WordEntry word;
+
+  const _SpellingsLine(this.word);
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final style = TextStyle(fontSize: 13, color: scheme.onSurfaceVariant);
+    final reachedBy = word.lookedUpAs;
+    // Misspellings get a card looked up by them, not a place on it.
+    final listed = word.variants.where((v) => !v.isMisspelling && v.text != reachedBy).toList();
+    if (reachedBy == null && listed.isEmpty) return const SizedBox.shrink();
+
+    String describe(SpellingVariant v) => '${v.text} (${v.label})';
+    const shown = 4;
+    final more = listed.length - shown;
+    final others = [
+      for (final v in listed.take(shown)) describe(v),
+      if (more > 0) '$more more',
+    ].join(', ');
+
+    final reachedVariant = reachedBy == null
+        ? null
+        : word.variants.where((v) => v.text == reachedBy).firstOrNull;
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (reachedBy != null)
+            Text.rich(
+              TextSpan(children: [
+                TextSpan(
+                  text: reachedBy,
+                  style: TextStyle(fontWeight: FontWeight.w600, color: scheme.onSurface),
+                ),
+                TextSpan(
+                  text: reachedVariant == null || reachedVariant.isMisspelling
+                      ? ' is a spelling of ${word.headword}'
+                      : ' is the ${reachedVariant.label} spelling of ${word.headword}',
+                ),
+              ]),
+              style: style,
+            ),
+          if (listed.isNotEmpty)
+            Text(
+              '${reachedBy == null ? 'Also spelled' : 'Also'} $others',
+              style: style,
+            ),
+        ],
+      ),
     );
   }
 }

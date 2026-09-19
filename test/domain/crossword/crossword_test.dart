@@ -485,6 +485,24 @@ void main() {
       expect(anchor.fromStudyPool, isTrue);
     });
 
+    // The repository scales the budgets up in debug builds, where the JIT
+    // makes the same search several times slower. A scale of zero is the
+    // cheapest proof the scale is applied at all: no time, no puzzle.
+    test('the time budgets scale with the request', () {
+      CrosswordPuzzle? generate(double scale) => generateCrossword(CrosswordGenerationRequest(
+            difficulty: CrosswordDifficulty.mini,
+            entries: _entries,
+            srsAnchors: const [],
+            blockedAnswers: const {},
+            weekday: DateTime.friday,
+            seed: 5150,
+            budgetScale: scale,
+          ));
+      expect(generate(0), isNull);
+      expect(generate(1), isNotNull);
+      expect(generate(5), isNotNull);
+    });
+
     // A verdict's word edits re-solve the grid, which needs the index, so the
     // revision crosses the same boundary as generation — with a puzzle and a
     // verdict in the request this time.

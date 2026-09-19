@@ -71,7 +71,7 @@ class SrsUpdate {
 }
 
 /// A direct, unmodified implementation of SuperMemo-2 — see the "Algorithm"
-/// section of the Word Wizard design doc for the reference formula this mirrors.
+/// section of the Lexery design doc for the reference formula this mirrors.
 ///
 /// [Grade.hard] deviates from the textbook algorithm the same way Anki's
 /// classic scheduler does: instead of running the EF formula, the interval

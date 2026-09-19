@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Palette lifted from the Word Wizard design doc — a warm "old dictionary
+/// Palette lifted from the Lexery design doc — a warm "old dictionary
 /// paper" light theme and its dark-mode counterpart.
 class AppTheme {
   static const _lightPaper = Color(0xFFE9EAE0);

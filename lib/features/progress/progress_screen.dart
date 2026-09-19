@@ -60,7 +60,7 @@ class ProgressScreen extends ConsumerWidget {
 String shareText(ProgressSummary s, {required int streak}) {
   final o = s.overview;
   final lines = <String>[
-    'Word Wizard — my vocabulary',
+    'Lexery — my vocabulary',
     '${formatCount(o.mastered)} words mastered · ${formatCount(o.studying)} studying'
         '${o.unstudied > 0 ? ' · ${formatCount(o.unstudied)} in lists' : ''}',
   ];

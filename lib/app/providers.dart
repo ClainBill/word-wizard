@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
@@ -12,14 +13,18 @@ import '../data/repositories/search_repository.dart';
 import '../data/repositories/settings_repository.dart';
 import '../data/repositories/study_repository.dart';
 import '../domain/crossword/crossword_models.dart';
+import '../domain/models/daily_word.dart';
 import '../domain/models/progress.dart';
 import '../domain/models/reader_document.dart';
 import '../domain/models/study_dashboard.dart';
 import '../domain/models/study_direction.dart';
 import '../domain/reader/reader_analysis.dart';
 import '../services/api_key_store.dart';
+import '../services/auth_service.dart';
 import '../services/clipboard_service.dart';
+import '../services/feedback_service.dart';
 import '../services/notification_service.dart';
+import '../services/screen_capture.dart';
 
 /// Overridden with a real, already-opened [AppDatabases] in `main()` before
 /// [runApp] — every provider below assumes the databases are ready.
@@ -49,6 +54,27 @@ final settingsRepositoryProvider = Provider<SettingsRepository>(
 
 final remindersEnabledProvider = StreamProvider<bool>(
   (ref) => ref.watch(settingsRepositoryProvider).watchRemindersEnabled(),
+);
+
+final wordOfTheDayEnabledProvider = StreamProvider<bool>(
+  (ref) => ref.watch(settingsRepositoryProvider).watchWordOfTheDayEnabled(),
+);
+
+/// The featured word for one calendar day, keyed by the day so the Search
+/// tab — alive across tab switches — moves on at midnight rather than
+/// keeping yesterday's.
+final wordOfTheDayProvider = FutureProvider.family<DailyWord?, DateTime>(
+  (ref, day) => ref.watch(searchRepositoryProvider).wordOfTheDay(day),
+);
+
+/// Light, dark or system — what `MaterialApp.themeMode` follows.
+final themeModeProvider = StreamProvider<ThemeMode>(
+  (ref) => ref.watch(settingsRepositoryProvider).watchThemeMode(),
+);
+
+/// The chosen pronunciation voice, or null for the device default.
+final ttsVoiceProvider = StreamProvider<TtsVoiceChoice?>(
+  (ref) => ref.watch(settingsRepositoryProvider).watchTtsVoice(),
 );
 
 /// The user's own OpenAI key. A ChangeNotifier so Settings (and the
@@ -133,9 +159,28 @@ final senseChoicesProvider = StreamProvider.family<SenseChoices, int>(
 final ttsProvider = Provider<FlutterTts>((ref) {
   final tts = FlutterTts();
   tts.setLanguage('en-US');
+  // The voice setting is applied to this one engine as it changes rather
+  // than watched, which would rebuild the engine — and every speaker
+  // button holding it — on each change.
+  ref.listen<AsyncValue<TtsVoiceChoice?>>(
+    ttsVoiceProvider,
+    (_, next) => next.whenData((voice) => applyTtsVoice(tts, voice)),
+    fireImmediately: true,
+  );
   ref.onDispose(tts.stop);
   return tts;
 });
+
+/// Points [tts] at [voice], or back at the default English voice for null.
+/// A voice that has since disappeared from the device (an uninstalled
+/// language pack) is rejected by the engine, and the default is used.
+Future<void> applyTtsVoice(FlutterTts tts, TtsVoiceChoice? voice) async {
+  if (voice == null) {
+    await tts.setLanguage('en-US');
+    return;
+  }
+  await tts.setVoice({'name': voice.name, 'locale': voice.locale});
+}
 
 // ---------------------------------------------------------------------------
 // Reader
@@ -268,4 +313,33 @@ final huntSessionProvider = FutureProvider.autoDispose.family<HuntSession?, int?
 
 final huntHistoryProvider = FutureProvider.autoDispose<List<HuntHistoryEntry>>(
   (ref) => ref.watch(huntRepositoryProvider).history(),
+);
+
+// ---------------------------------------------------------------------------
+// Feedback
+// ---------------------------------------------------------------------------
+
+final feedbackServiceProvider = Provider<FeedbackService>((ref) => FeedbackService.instance);
+
+/// Reports written offline and waiting in the outbox; the Settings tile
+/// says so. Invalidated after every submit and flush.
+final feedbackPendingProvider = FutureProvider<int>(
+  (ref) => ref.watch(feedbackServiceProvider).pendingCount(),
+);
+
+/// The last few screens, for the report form's thumbnails. A
+/// ChangeNotifierProvider so the form rebuilds as captures arrive.
+final screenCaptureProvider = ChangeNotifierProvider<ScreenCapture>((ref) => ScreenCapture.instance);
+
+// ---------------------------------------------------------------------------
+// Account
+// ---------------------------------------------------------------------------
+
+/// Overridden in `main` with the Supabase-backed service when the build has
+/// a backend; the default is signed-out forever (tests, or no backend).
+final authServiceProvider = Provider<AuthService>((ref) => const NoAuthService());
+
+/// The signed-in user, live. Null when signed out.
+final authUserProvider = StreamProvider<AuthUser?>(
+  (ref) => ref.watch(authServiceProvider).changes,
 );

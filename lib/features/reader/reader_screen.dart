@@ -34,7 +34,7 @@ class ReaderScreen extends ConsumerStatefulWidget {
   ConsumerState<ReaderScreen> createState() => _ReaderScreenState();
 }
 
-enum _MenuAction { write, edit, rename, options, delete }
+enum _MenuAction { write, edit, rename, options }
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBindingObserver {
   ReaderSelection? _selection;
@@ -246,6 +246,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
             tooltip: 'History',
             onPressed: () => context.push('/reader/history'),
           ),
+          // Right in the bar rather than in the menu: clearing out a text
+          // just read is the commonest thing done here after reading it.
+          if (doc != null)
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Remove from history',
+              onPressed: () => _delete(doc),
+            ),
           PopupMenuButton<_MenuAction>(
             onSelected: (action) {
               switch (action) {
@@ -257,8 +265,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
                   if (doc != null) _rename(doc);
                 case _MenuAction.options:
                   showReaderOptionsSheet(context);
-                case _MenuAction.delete:
-                  if (doc != null) _delete(doc);
               }
             },
             itemBuilder: (context) => [
@@ -280,11 +286,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
                 value: _MenuAction.options,
                 child: ListTile(leading: Icon(Icons.text_fields), title: Text('Reading options')),
               ),
-              if (doc != null)
-                const PopupMenuItem(
-                  value: _MenuAction.delete,
-                  child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Remove from history')),
-                ),
             ],
           ),
         ],
@@ -363,6 +364,12 @@ class _PaperSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
+      // The full width whatever the child: while the document is still
+      // loading the child is nothing at all, and a sheet sized to it was a
+      // zero-width, full-height box in the middle of the column whose two
+      // side borders drew as a line down the centre of the screen for the
+      // frame or two before the page arrived.
+      width: double.infinity,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: scheme.surface,

@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:math' show min, pi;
+import 'dart:math' show Random, atan2, cos, min, pi, sin;
 
 import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/material.dart';
@@ -50,13 +50,21 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
   ({String text, _Verdict verdict})? _feedback;
   Timer? _feedbackTimer;
 
-  /// Hint mode: per-tile counts of remaining required words starting there,
-  /// and dimming of tiles no remaining word needs.
-  bool _hints = false;
+  /// Required words with a hint showing: the tile the word starts on and
+  /// an arrow toward its second letter. Each one cost a hint and stays on
+  /// the board until the word is found.
+  final Set<String> _hints = {};
+  int _hintsUsed = 0;
+  final _rand = Random();
 
-  /// Whether hints were ever used on this board. Persisted: like a reveal
+  /// Whether a hint was ever spent on this board. Persisted: like a reveal
   /// it makes the solve assisted, and that has to survive a restart.
   bool _hinted = false;
+
+  /// Whether the halfway unlock — per-tile counts of remaining words
+  /// starting there, and dimming of tiles no remaining word needs — has
+  /// been announced. Persisted so reopening the board doesn't repeat it.
+  bool _halfwayAnnounced = false;
 
   bool get _aided => _hinted || _revealed.isNotEmpty;
 
@@ -85,10 +93,6 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
       });
     });
   }
-
-  /// A word just revealed, drawn on the board for a moment.
-  List<int>? _flashPath;
-  Timer? _flashTimer;
 
   int _bankedMs = 0;
   final Stopwatch _clock = Stopwatch();
@@ -126,7 +130,6 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
     _clock.stop();
     _flushPlayTime();
     _feedbackTimer?.cancel();
-    _flashTimer?.cancel();
     _spin.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -145,6 +148,11 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
       ..clear()
       ..addAll(session.revealed);
     _hinted = session.hinted;
+    _hints
+      ..clear()
+      ..addAll(session.hints);
+    _hintsUsed = session.hintsUsed;
+    _halfwayAnnounced = session.halfwayAnnounced;
     _completed = session.completed;
     _bankedMs = session.activeMs;
     _path.clear();
@@ -155,6 +163,8 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
     if (!_completed) {
       _repo.startPlay(session.id);
       _clock.start();
+      // A board saved before the unlock existed may already be past half.
+      _checkHalfway();
     }
   }
 
@@ -176,6 +186,11 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
 
   Iterable<String> get _remaining => _required.where((w) => !_found.contains(w));
 
+  int get _hintsLeft => huntHintsLeft(_puzzle!, _found, _hintsUsed);
+
+  /// Half the required words found: the per-tile start counts are open.
+  bool get _halfway => huntHalfwayReached(_puzzle!, _found);
+
   void _save() {
     final puzzleId = _puzzleId;
     if (puzzleId == null) return;
@@ -184,7 +199,55 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
       found: _found,
       revealed: _revealed,
       hinted: _hinted,
+      hints: _hints,
+      hintsUsed: _hintsUsed,
+      halfwayAnnounced: _halfwayAnnounced,
       completed: _completed,
+    );
+  }
+
+  /// Records a word as found — traced or revealed — dropping any hint on
+  /// it, then runs the checks a find can trip: completion first, so a
+  /// board finished in one go isn't told it's halfway.
+  void _markFound(String word) {
+    _found.add(word);
+    _hints.remove(word);
+  }
+
+  void _afterFind() {
+    _save();
+    _checkCompletion();
+    _checkHalfway();
+  }
+
+  void _checkHalfway() {
+    if (_halfwayAnnounced || _completed || !_halfway) return;
+    _halfwayAnnounced = true;
+    _save();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _showHalfway();
+    });
+  }
+
+  void _showHalfway() {
+    final puzzle = _puzzle!;
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.grid_on),
+        title: const Text('Halfway there!'),
+        content: Text(
+          'You\'ve found $_requiredFound of ${puzzle.requiredCount} words, which unlocks the '
+          'word counter: each tile now shows how many of the remaining words start '
+          'on it, and tiles no remaining word needs are dimmed.',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Keep going'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -268,7 +331,7 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
       _setFeedback('Not in word list', _Verdict.unknown);
       return;
     }
-    _found.add(word);
+    _markFound(word);
     _revealed.remove(word);
     switch (wordClass) {
       case HuntWordClass.anchor:
@@ -290,10 +353,9 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
           _Verdict.required,
         );
       case HuntWordClass.bonus:
-        _setFeedback('Bonus +1', _Verdict.bonus);
+        _setFeedback('Bonus +1  ·  +1 hint', _Verdict.bonus);
     }
-    _save();
-    _checkCompletion();
+    _afterFind();
   }
 
   /// Extends the trace to [cell] if that is a legal next step; stepping
@@ -328,16 +390,33 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
           ..clear()
           ..add(cell);
       }
+      // Starting a trace on a hinted tile repeats what the hint said, so
+      // the length isn't lost once its feedback has faded.
+      if (_path.length == 1 && _path.single == cell) _repeatHint(cell);
     });
   }
 
+  void _repeatHint(int cell) {
+    final puzzle = _puzzle!;
+    final lengths = [
+      for (final w in _hints)
+        if (puzzle.wordInfo(w)!.path.first == cell) w.length,
+    ]..sort();
+    if (lengths.isEmpty) return;
+    final text = switch (lengths.length) {
+      1 => '${lengths.single}-letter word starts at the arrow',
+      _ => '${lengths.join('- and ')}-letter words start at the arrow',
+    };
+    _setFeedback(text, _Verdict.duplicate);
+  }
+
   // -------------------------------------------------------------------
-  // Hints and reveals
+  // Hints
   // -------------------------------------------------------------------
 
-  /// Asks once, before the first hint or reveal on a board, whether to
-  /// give up the clean solve. Returns true when it's fine to go ahead —
-  /// immediately if the board is already assisted or finished.
+  /// Asks once, before the first hint on a board, whether to give up the
+  /// clean solve. Returns true when it's fine to go ahead — immediately if
+  /// the board is already assisted or finished.
   Future<bool> _confirmAssist(String action) async {
     if (_aided || _completed) return true;
     final ok = await showDialog<bool>(
@@ -345,8 +424,8 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
       builder: (context) => AlertDialog(
         title: Text('$action?'),
         content: const Text(
-          'Using hints or reveals marks this board as assisted: it won\'t count '
-          'as a clean solve, and it\'s left out of your best times and scores.',
+          'Using a hint marks this board as assisted: it won\'t count as a '
+          'clean solve, and it\'s left out of your best times and scores.',
         ),
         actions: [
           TextButton(
@@ -360,63 +439,38 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
     return ok == true && mounted;
   }
 
-  Future<void> _toggleHints() async {
-    if (_hints) {
-      setState(() => _hints = false);
+  /// Spends a hint on a random remaining word that doesn't have one yet:
+  /// its start tile lights up with an arrow toward the second letter.
+  Future<void> _useHint() async {
+    if (_completed) return;
+    if (_hintsLeft == 0) {
+      setState(() => _setFeedback('No hints left — bonus words earn more', _Verdict.duplicate));
       return;
     }
-    if (!await _confirmAssist('Show hints')) return;
-    setState(() {
-      _hints = true;
-      _hinted = true;
-    });
-    _save();
-  }
-
-  Future<void> _revealOne() async {
-    if (!await _confirmAssist('Reveal a word')) return;
     final puzzle = _puzzle!;
-    // Anchors first — they're the words the board exists for and the ones a
-    // stuck player most wants to see — then the longest remaining word.
-    final remaining = _remaining.toList();
-    if (remaining.isEmpty) return;
-    remaining.sort((a, b) {
-      final aAnchor = puzzle.anchorWords.containsKey(a) ? 0 : 1;
-      final bAnchor = puzzle.anchorWords.containsKey(b) ? 0 : 1;
-      if (aAnchor != bAnchor) return aAnchor - bAnchor;
-      return b.length - a.length;
-    });
-    final word = remaining.first;
+    final candidates = _remaining.where((w) => !_hints.contains(w)).toList();
+    if (candidates.isEmpty) {
+      setState(() => _setFeedback('Every word left already has a hint', _Verdict.duplicate));
+      return;
+    }
+    if (!await _confirmAssist('Use a hint')) return;
+    // Two arrows on one tile would hide each other, so a word starting on
+    // a tile with no hint yet is preferred while there is one.
+    final hintedStarts = {for (final w in _hints) puzzle.wordInfo(w)!.path.first};
+    final fresh = [
+      for (final w in candidates)
+        if (!hintedStarts.contains(puzzle.wordInfo(w)!.path.first)) w,
+    ];
+    final pool = fresh.isEmpty ? candidates : fresh;
+    final word = pool[_rand.nextInt(pool.length)];
     setState(() {
       _path.clear();
-      _found.add(word);
-      _revealed.add(word);
-      _setFeedback(word, _Verdict.duplicate);
-      _flash(puzzle.wordInfo(word)!.path);
+      _hints.add(word);
+      _hintsUsed++;
+      _hinted = true;
+      _setFeedback('${word.length}-letter word starts at the arrow', _Verdict.duplicate);
     });
     _save();
-    _checkCompletion();
-  }
-
-  Future<void> _revealAll() async {
-    if (!await _confirmAssist('Reveal everything')) return;
-    setState(() {
-      _path.clear();
-      for (final word in _remaining.toList()) {
-        _found.add(word);
-        _revealed.add(word);
-      }
-    });
-    _save();
-    _checkCompletion();
-  }
-
-  void _flash(List<int> path) {
-    _flashTimer?.cancel();
-    _flashPath = path;
-    _flashTimer = Timer(const Duration(milliseconds: 1600), () {
-      if (mounted) setState(() => _flashPath = null);
-    });
   }
 
   Future<void> _regenerate() async {
@@ -513,7 +567,10 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
   @override
   Widget build(BuildContext context) {
     final sessionAsync = ref.watch(huntSessionProvider(widget.puzzleId));
-    final loaded = sessionAsync.valueOrNull != null;
+    final session = sessionAsync.valueOrNull;
+    final loaded = session != null;
+    // Before the bar: its hint count reads the prepared state.
+    if (session != null) _prepare(session);
     // Back arrow + title + four compact icons + menu fits from about 380dp.
     final roomForHistory = MediaQuery.sizeOf(context).width >= 380;
 
@@ -538,10 +595,14 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
             ),
           if (loaded)
             IconButton(
-              icon: Icon(_hints ? Icons.lightbulb : Icons.lightbulb_outline),
-              tooltip: 'Hints',
+              icon: Badge(
+                label: Text('$_hintsLeft'),
+                isLabelVisible: !_completed,
+                child: const Icon(Icons.lightbulb_outline),
+              ),
+              tooltip: _completed ? 'Hints' : 'Hint ($_hintsLeft left)',
               visualDensity: VisualDensity.compact,
-              onPressed: _toggleHints,
+              onPressed: _completed ? null : _useHint,
             ),
           // History gets its own button when the bar has room for it; on
           // a narrow phone it drops into the menu rather than squeezing the
@@ -556,16 +617,10 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
           PopupMenuButton<String>(
             tooltip: 'More',
             onSelected: (value) => switch (value) {
-              'one' => _revealOne(),
-              'all' => _revealAll(),
               'new' => _regenerate(),
               _ => context.push('/games/hunt/history'),
             },
             itemBuilder: (context) => [
-              if (loaded && !_completed)
-                const PopupMenuItem(value: 'one', child: Text('Reveal a word')),
-              if (loaded && !_completed)
-                const PopupMenuItem(value: 'all', child: Text('Reveal everything')),
               if (widget.puzzleId == null)
                 const PopupMenuItem(value: 'new', child: Text('New board')),
               if (!roomForHistory) const PopupMenuItem(value: 'history', child: Text('History')),
@@ -585,7 +640,6 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
               ),
             );
           }
-          _prepare(session);
           return _body(context, session.puzzle);
         },
       ),
@@ -658,12 +712,12 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
                 builder: (context, _) => _Board(
                   puzzle: puzzle,
                   path: _path,
-                  flashPath: _flashPath,
                   rotation: _rotation,
                   // Quarter turn in progress, in turns: positive is clockwise.
                   spin: Curves.easeInOutCubic.transform(_spin.value) * 0.25 * _spinDirection,
-                  hints: _hints,
-                  remaining: _hints ? _remaining.toList() : const [],
+                  counter: _halfway && !_completed,
+                  remaining: _remaining.toList(),
+                  hintPaths: [for (final w in _hints) puzzle.wordInfo(w)!.path],
                   enabled: !_completed && !_spin.isAnimating,
                   onTap: _tap,
                   onPanStart: (cell) => setState(() {
@@ -681,7 +735,7 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
                 ),
               ),
             ),
-            if (_hints)
+            if (_halfway && !_completed)
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
                 child: _RemainingByLength(remaining: _remaining.toList()),
@@ -740,7 +794,9 @@ class _TargetsStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final theme = puzzle.themeLabel;
-    if (puzzle.anchors.isEmpty && theme == null) return const SizedBox(height: 8);
+    if (puzzle.anchors.isEmpty && theme == null) {
+      return const SizedBox(height: 8);
+    }
     final themeFound = puzzle.themeWords.where(found.contains).length;
 
     return Padding(
@@ -800,7 +856,9 @@ class _TraceLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final fb = feedback;
-    if (traced.isEmpty && fb != null) {
+    // A one-letter trace is the tapped tile, which is lit up on the board
+    // already, so a message about it (a repeated hint) takes the line.
+    if (traced.length <= 1 && fb != null) {
       final color = switch (fb.verdict) {
         _Verdict.required => scheme.primary,
         _Verdict.bonus => scheme.secondary,
@@ -829,15 +887,21 @@ class _TraceLabel extends StatelessWidget {
 class _Board extends StatelessWidget {
   final HuntPuzzle puzzle;
   final List<int> path;
-  final List<int>? flashPath;
   final int rotation;
 
   /// Extra rotation being animated, in turns (0 when idle). The grid turns
   /// as a whole while each tile's letter counter-turns, so the letters
   /// stay upright throughout.
   final double spin;
-  final bool hints;
+
+  /// The halfway unlock: per-tile start counts and dimming, from
+  /// [remaining].
+  final bool counter;
   final List<String> remaining;
+
+  /// Paths of the words with a hint showing; each marks its first cell
+  /// with an arrow toward its second.
+  final List<List<int>> hintPaths;
   final bool enabled;
   final void Function(int cell) onTap;
   final void Function(int cell) onPanStart;
@@ -847,11 +911,11 @@ class _Board extends StatelessWidget {
   const _Board({
     required this.puzzle,
     required this.path,
-    required this.flashPath,
     required this.rotation,
     required this.spin,
-    required this.hints,
+    required this.counter,
     required this.remaining,
+    required this.hintPaths,
     required this.enabled,
     required this.onTap,
     required this.onPanStart,
@@ -894,12 +958,12 @@ class _Board extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
 
-    // Hint data: how many remaining required words start on each tile, and
-    // which tiles any remaining word still needs. Both use the certified
-    // start/use masks, which union every route of every word.
+    // Counter data: how many remaining required words start on each tile,
+    // and which tiles any remaining word still needs. Both use the
+    // certified start/use masks, which union every route of every word.
     final startCounts = List<int>.filled(huntCells, 0);
     var stillUsed = 0;
-    if (hints) {
+    if (counter) {
       for (final word in remaining) {
         final info = puzzle.wordInfo(word)!;
         stillUsed |= info.uses;
@@ -908,8 +972,16 @@ class _Board extends StatelessWidget {
         }
       }
     }
+    // Hint arrows: the angle from a word's first cell to its second, in
+    // display space so the arrow turns with the board.
+    final arrows = <int, double>{};
+    for (final hintPath in hintPaths) {
+      if (hintPath.length < 2) continue;
+      final from = _displayOf(hintPath[0]);
+      final to = _displayOf(hintPath[1]);
+      arrows[hintPath[0]] = atan2((to.$1 - from.$1).toDouble(), (to.$2 - from.$2).toDouble());
+    }
     final onPath = {for (final c in path) c};
-    final onFlash = {for (final c in flashPath ?? const <int>[]) c};
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -951,15 +1023,22 @@ class _Board extends StatelessWidget {
                   children: [
                     for (var row = 0; row < huntSize; row++)
                       for (var col = 0; col < huntSize; col++)
+                        // Keyed by board cell, not display slot: a rotation
+                        // moves each tile's element to its new slot rather
+                        // than handing every slot a different cell, which
+                        // had each tile's AnimatedContainer cross-fading
+                        // from the old cell's hint tint to the new one's —
+                        // a flash of green on seemingly random tiles.
                         _Tile(
+                          key: ValueKey(_boardIndexAt(row, col)),
                           letter: puzzle.board[_boardIndexAt(row, col)],
                           selected: onPath.contains(_boardIndexAt(row, col)),
-                          flashed: onFlash.contains(_boardIndexAt(row, col)),
                           dimmed:
-                              hints &&
+                              counter &&
                               remaining.isNotEmpty &&
                               (stillUsed >> _boardIndexAt(row, col) & 1) == 0,
-                          badge: hints ? startCounts[_boardIndexAt(row, col)] : null,
+                          badge: counter ? startCounts[_boardIndexAt(row, col)] : null,
+                          hintAngle: arrows[_boardIndexAt(row, col)],
                           size: cell,
                           counterSpin: -spin,
                         ),
@@ -975,17 +1054,6 @@ class _Board extends StatelessWidget {
                     ),
                   ),
                 ),
-                if (flashPath != null)
-                  IgnorePointer(
-                    child: CustomPaint(
-                      size: Size.square(constraints.maxWidth),
-                      painter: _TracePainter(
-                        points: [for (final c in flashPath!) _centre(_displayOf(c), cell)],
-                        color: scheme.tertiary.withValues(alpha: 0.6),
-                        width: cell * 0.14,
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
@@ -1001,20 +1069,24 @@ class _Board extends StatelessWidget {
 class _Tile extends StatelessWidget {
   final String letter;
   final bool selected;
-  final bool flashed;
   final bool dimmed;
   final int? badge;
+
+  /// A hint on this tile: the direction of the hinted word's second
+  /// letter, in radians clockwise from screen-right. Null for no hint.
+  final double? hintAngle;
   final double size;
 
   /// Turns to rotate the tile's contents by, cancelling the grid's spin.
   final double counterSpin;
 
   const _Tile({
+    super.key,
     required this.letter,
     required this.selected,
-    required this.flashed,
     required this.dimmed,
     required this.badge,
+    required this.hintAngle,
     required this.size,
     this.counterSpin = 0,
   });
@@ -1022,10 +1094,11 @@ class _Tile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final hinted = hintAngle != null;
     final background = selected
         ? scheme.primaryContainer
-        : flashed
-        ? scheme.tertiaryContainer
+        : hinted
+        ? scheme.tertiaryContainer.withValues(alpha: 0.45)
         : scheme.surface;
     return Padding(
       padding: EdgeInsets.all(size * 0.06),
@@ -1035,39 +1108,66 @@ class _Tile extends StatelessWidget {
           color: background,
           borderRadius: BorderRadius.circular(size * 0.18),
           border: Border.all(
-            color: selected ? scheme.primary : scheme.outlineVariant,
-            width: selected ? 2 : 1,
+            color: selected
+                ? scheme.primary
+                : hinted
+                ? scheme.tertiary
+                : scheme.outlineVariant,
+            width: selected || hinted ? 2 : 1,
           ),
         ),
-        child: Transform.rotate(
-          angle: counterSpin * 2 * pi,
-          child: Stack(
-            children: [
-              Center(
-                child: Text(
-                  letter,
-                  style: TextStyle(
-                    fontSize: size * 0.42,
-                    fontWeight: FontWeight.w700,
-                    color: dimmed ? scheme.onSurface.withValues(alpha: 0.25) : scheme.onSurface,
+        child: Stack(
+          children: [
+            // Letter and count counter-turn so they stay upright while the
+            // grid spins.
+            Transform.rotate(
+              angle: counterSpin * 2 * pi,
+              child: Stack(
+                children: [
+                  Center(
+                    child: Text(
+                      letter,
+                      style: TextStyle(
+                        fontSize: size * 0.42,
+                        fontWeight: FontWeight.w700,
+                        color: dimmed ? scheme.onSurface.withValues(alpha: 0.25) : scheme.onSurface,
+                      ),
+                    ),
                   ),
-                ),
+                  if (badge != null && badge! > 0)
+                    Positioned(
+                      top: size * 0.06,
+                      right: size * 0.08,
+                      child: Text(
+                        '$badge',
+                        style: TextStyle(
+                          fontSize: size * 0.16,
+                          fontWeight: FontWeight.w600,
+                          color: scheme.primary,
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              if (badge != null && badge! > 0)
-                Positioned(
-                  top: size * 0.06,
-                  right: size * 0.08,
-                  child: Text(
-                    '$badge',
-                    style: TextStyle(
-                      fontSize: size * 0.16,
-                      fontWeight: FontWeight.w600,
-                      color: scheme.primary,
+            ),
+            // The arrow points at a neighbouring tile, so unlike the letter
+            // it turns *with* the grid: it sits outside the counter-spin,
+            // at the tile's edge on the side the next letter is.
+            if (hinted)
+              IgnorePointer(
+                child: Align(
+                  alignment: Alignment(cos(hintAngle!) * 0.72, sin(hintAngle!) * 0.72),
+                  child: Transform.rotate(
+                    angle: hintAngle!,
+                    child: Icon(
+                      Icons.arrow_forward_rounded,
+                      size: size * 0.24,
+                      color: scheme.tertiary,
                     ),
                   ),
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );
@@ -1110,7 +1210,8 @@ class _TracePainter extends CustomPainter {
   }
 }
 
-/// Hint: how many required words are left at each length.
+/// Part of the halfway unlock: how many required words are left at each
+/// length.
 class _RemainingByLength extends StatelessWidget {
   final List<String> remaining;
 

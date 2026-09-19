@@ -38,6 +38,10 @@ void main() {
       CREATE TABLE dict.forms (
         id INTEGER PRIMARY KEY, entry_id INTEGER NOT NULL, form_text TEXT NOT NULL,
         form_type TEXT NOT NULL)''');
+    await db.customStatement('''
+      CREATE TABLE dict.spelling_variants (
+        variant TEXT NOT NULL, headword TEXT NOT NULL, label TEXT NOT NULL,
+        PRIMARY KEY (variant, headword))''');
 
     Future<void> entry(int id, String headword, String gloss) async {
       await db.customStatement(
@@ -119,6 +123,54 @@ void main() {
 
     // Today's board is now the regeneration.
     expect((await repo.loadOrGenerate())!.id, second.id);
+  });
+
+  test('hints round-trip, drop once found, and are budgeted by bonus words', () async {
+    final session = (await repo.loadOrGenerate())!;
+    final puzzle = session.puzzle;
+    expect(session.hints, isEmpty);
+    expect(session.hintsUsed, 0);
+    expect(session.halfwayAnnounced, isFalse);
+    expect(huntHintsLeft(puzzle, const {}, 0), huntStartingHints);
+
+    // Two starting hints; a bonus word earns one; spending is never negative.
+    final bonus = puzzle.bonus.keys.first;
+    expect(huntHintsLeft(puzzle, {bonus}, 0), huntStartingHints + 1);
+    expect(huntHintsLeft(puzzle, {bonus}, 3), 0);
+    expect(huntHintsLeft(puzzle, {bonus}, 9), 0);
+
+    // A hinted word, once found, comes back without its hint.
+    final hinted = puzzle.main.keys.first;
+    final other = puzzle.main.keys.skip(1).first;
+    await repo.saveProgress(
+      session.id,
+      found: {hinted, bonus},
+      revealed: const {},
+      hinted: true,
+      hints: {hinted, other},
+      hintsUsed: 2,
+      halfwayAnnounced: true,
+      completed: false,
+    );
+    final loaded = (await repo.loadPuzzle(session.id))!;
+    expect(loaded.hints, {other});
+    expect(loaded.hintsUsed, 2);
+    expect(loaded.hinted, isTrue);
+    expect(loaded.halfwayAnnounced, isTrue);
+    expect(huntHintsLeft(puzzle, loaded.found, loaded.hintsUsed), 1);
+    expect((await repo.history()).single.play.aided, isTrue);
+  });
+
+  test('the halfway unlock opens at half the required words', () async {
+    final session = (await repo.loadOrGenerate())!;
+    final puzzle = session.puzzle;
+    final required = [...puzzle.anchorWords.keys, ...puzzle.main.keys];
+    final half = (required.length + 1) ~/ 2;
+    expect(huntHalfwayReached(puzzle, const {}), isFalse);
+    expect(huntHalfwayReached(puzzle, required.take(half - 1).toSet()), isFalse);
+    expect(huntHalfwayReached(puzzle, required.take(half).toSet()), isTrue);
+    // Bonus words don't count toward it.
+    expect(huntHalfwayReached(puzzle, puzzle.bonus.keys.take(half).toSet()), isFalse);
   });
 
   test('a completed board is recorded as a finished game', () async {

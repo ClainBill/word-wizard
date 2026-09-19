@@ -1,10 +1,12 @@
-# Word Wizard — design doc
+# Lexery — design doc
 
 **Version** 0.6 · **Date** 2026-09-06 · **Author** willcharlesgill · **Platform** Flutter · iOS + Android · **Distribution** personal use, unlisted
 
 An offline, ad-free advanced-English vocabulary dictionary and flashcard app for Flutter — functionally reverse-engineered from renzo Inc.'s *Japanese* app, retargeted from Japanese-for-English-speakers to advanced-English-for-fluent-speakers.
 
-**App icon:** a cream "W" monogram (Fraunces-adjacent serif) with a small four-point sparkle at its shoulder, on a solid `#8A5A22` field — legible at launcher size, and the sparkle is the one on-brand nod to "Wizard" without leaning on a literal wand or hat. Used as both the Android adaptive icon (foreground glyph + solid-color background layer) and, as a plain white silhouette, the status-bar notification icon.
+**Name:** *Lexery* — *lexicon* + *library*. It names the app and, in the second sense, the user's own growing collection of words: a word card's enrol button reads **Add to Lexery** (→ *In Lexery* once it is), while the study session, Study tab and everything about reviewing keep the plain word *study*. (Renamed from *Word Wizard* on 2026-09-14; that name was already taken. Package, bundle and channel identifiers still say `word_wizard` / `wordwizard` — those are not user-facing and a rename would touch every import.)
+
+**App icon:** a cream "L" monogram (Fraunces, WONK on) set left of centre, with a bookmark ribbon hanging from the top edge at the right — the *library* half of the name — on a solid `#8A5A22` field. Rendered by `tool/render_icon.py` from the Fraunces variable font; used as the full-bleed iOS icon, the Android adaptive icon (foreground glyph + solid-color background layer) and, as a plain white silhouette, the status-bar notification icon.
 
 This file is the source of truth for the design doc — it supersedes the stale `README.md` reference to `DesignInspiration/` (that folder is just mood-board images, no doc). A polished, browsable rendering of this doc is also kept as a Claude Artifact; treat this file as canonical when the two ever drift.
 
@@ -54,7 +56,7 @@ All three source datasets are free, open, community-maintained dictionary projec
 
 ## Vision
 
-What Word Wizard is for, who it's for, and what it deliberately isn't.
+What Lexery is for, who it's for, and what it deliberately isn't.
 
 **Target user:** a single fluent English reader (you) who wants to systematically expand vocabulary — GRE/SAT-tier words, literary and rare words, precise near-synonyms — the way a Japanese learner uses renzo's app to expand their lexicon: look a word up once, decide it's worth keeping, and let spaced repetition do the memorizing.
 
@@ -73,7 +75,7 @@ What Word Wizard is for, who it's for, and what it deliberately isn't.
 
 Every renzo feature, translated to its English-vocabulary equivalent, with a build priority (MVP / v1 / v2 / cut).
 
-| renzo feature | Word Wizard equivalent | Priority |
+| renzo feature | Lexery equivalent | Priority |
 |---|---|---|
 | Incremental dictionary search | Prefix + fuzzy search over the Wiktionary-derived headword index; every POS variant of a headword merged into a single ranked result | MVP |
 | Dictionary entry | Entry detail: word + IPA + TTS, senses grouped by POS, etymology, 3 examples always visible (expandable), forms & conjugations, custom Markdown notes | MVP |
@@ -320,7 +322,7 @@ Every idea raised after the MVP shipped, in the order they were raised, with wha
 | 6 | Crossword should save its state on quit and resume later | ✅ done | — | Found already built during the audit — every keystroke persists progress against that day's puzzle row. |
 | 7 | SRS review options: quiz from the meaning instead of the word (either direction, or both) | ✅ done | Medium | **Shipped 2026-09-10.** Not a toggle over one card but a second card: `study_cards` gained a `direction` column and a composite `UNIQUE(entry_id, direction)` (schema v9), so each direction carries its own ease/interval/due date/review log — receptive and productive knowledge of a word are different memories that decay at different rates. The picker lives in a study-options sheet reachable from the session's progress bar. Switching a direction off never deletes its cards; switching "both ways" on backfills reverse cards that inherit their sibling's due date rather than all becoming due today; a word's two cards are spaced apart in the queue so the second isn't answered off the first's short-term memory. |
 | 8 | Crossword text input should skip over cells that already have a letter in them | ✅ done | Quick | **Shipped 2026-09-06.** Typing through a word skips cells a crossing word already filled, jumping to the next word once nothing's left empty. |
-| 9 | SRS comprehension mini-exercises under the flipped card (sentence/synonym/definition matching, spelling, etc.) | ✅ done | Medium | **Rebuilt 2026-09-10.** The earlier set all tested producing *the word*, which on a word→meaning card is a spelling test rather than a memory jog — the missing half was the meaning. Games are now keyed to a `RecallTarget`: the pre-reveal jog exercises the side you were asked for, the post-reveal panel exercises the other, so every review touches both halves once. Eight visual games (`lib/features/study/recall_games.dart`): Crack the word, Fill the gap, Sound it out, Unscramble it, Guess from the clues, Which meaning is it?, Where does it belong?, Rebuild the meaning. Example-sentence matching ("Where does it belong?") closes the last open item here. |
+| 9 | SRS comprehension mini-exercises under the flipped card (sentence/synonym/definition matching, spelling, etc.) | ✅ done | Medium | **Rebuilt 2026-09-10.** The earlier set all tested producing *the word*, which on a word→meaning card is a spelling test rather than a memory jog — the missing half was the meaning. Games are now keyed to a `RecallTarget`: the pre-reveal jog exercises the side you were asked for, the post-reveal panel exercises the other, so every review touches both halves once. Eight visual games (`lib/features/study/recall_games.dart`): Crack the word, Fill the gap, Sound it out, Spell it out (the word's letters plus common-letter decoys on a small keyboard, so the key set gives nothing away), Guess from the clues, Which meaning is it?, Where does it belong?, Rebuild the meaning. Example-sentence matching ("Where does it belong?") closes the last open item here. |
 | 10 | From the full card during SRS, tap a word in the description/example to add it to a list — without leaving SRS | ✅ done | Medium | **Shipped 2026-09-06** — via the tappable-word feature (#15): tapping a word pops its own card up as a stacked sheet, with its own Add-to-list/Study buttons, on top of the study session. |
 | 11 | Remove a word from SRS without leaving the session (via an ⋮ menu) | ✅ done | Quick | **Shipped 2026-09-06.** The repository-level remove already existed (Manage Study Words); this wires a confirm-and-remove menu into the study session card itself. |
 | 12 | A Games tab with an intelligent daily Crossword/Strands-style game built from SRS words — prefer no cloud API | 🟡 partial | Large (remaining) | Games tab + daily Crossword exist; the generator was rebuilt from `PORTING_SPEC.md` (offline, deterministic per day, CSP fill over a scored word list, SRS words as anchors). A Strands-style word-search mode is unbuilt. |
@@ -335,7 +337,7 @@ Every idea raised after the MVP shipped, in the order they were raised, with wha
 | 21 | A "question" feature on the SRS card back — ask something about the word and get an answer | ⬜ open | Large | Implies an answering engine (an LLM call), a real scope decision against the offline-only stance — or else it's "just" a stored Q&A note with no automatic answer. |
 | 24 | Enter my own OpenAI API key in the app | ✅ done | Small | **Shipped 2026-09-11.** Settings → AI features. `ApiKeyStore` (flutter_secure_storage) with a Check/Save/Remove sheet; services prefer proxy → user key → debug define. See APP_INTEGRATION.md §4 for why a user's own key is allowed where a bundled one is not. |
 | 23 | Text clipboard analyser tab, with history | ✅ done | Large | **Shipped 2026-09-11** as the Reader tab (`lib/features/reader/`, `ReaderRepository`, `ClipboardService`, schema v11). Auto-pulls new clipboard text (3+ words) on every tab visit / app resume, resolving each word to its canonical entry in two batched lookups (`analyze`); marks are a live layer over that (`watchMarks`) so adding to a list from the page lights the word up at once. Android hands over the clipboard's HTML flavour through a small method channel, and checks the clip *timestamp* before reading content — Android 12+ toasts on every content read. Page look: paper sheet, serif, dateline, headings/quotes/lists, per-list highlighter colours, studying underline, uncommon dotted underline, legend chips that toggle each. Open: share-sheet intake, in-page text selection. |
-| 22 | *Other idea:* a separate app that turns a Google search into a flashcard | 💡 idea | — | Explicitly a different product concept, not a Word Wizard feature — noted for the record, not sized or scheduled. |
+| 22 | *Other idea:* a separate app that turns a Google search into a flashcard | 💡 idea | — | Explicitly a different product concept, not a Lexery feature — noted for the record, not sized or scheduled. |
 
 ---
 
@@ -353,8 +355,8 @@ Every idea raised after the MVP shipped, in the order they were raised, with wha
 - [Japanese — Google Play listing](https://play.google.com/store/apps/details?id=com.renzo.japanese) (com.renzo.japanese).
 - [japaneseapp.com/support/ios](https://www.japaneseapp.com/support/ios/) — SRS description, list/study flow, romaji toggle.
 - [japaneseapp.com/features](https://www.japaneseapp.com/features/) — full feature list, import sources, backup/restore, split view.
-- [Kaikki.org English Wiktionary extract](https://kaikki.org/dictionary/English/) — data source for Word Wizard's dictionary content.
+- [Kaikki.org English Wiktionary extract](https://kaikki.org/dictionary/English/) — data source for Lexery's dictionary content.
 
 ---
 
-*Word Wizard design doc · not affiliated with renzo Inc. · a browsable rendering of this content is also published as a [Claude Artifact](https://claude.ai/code/artifact/2a88c5f7-a49d-41c6-bcb5-ba549eb0b22a).*
+*Lexery design doc · not affiliated with renzo Inc. · a browsable rendering of this content is also published as a [Claude Artifact](https://claude.ai/code/artifact/2a88c5f7-a49d-41c6-bcb5-ba549eb0b22a).*

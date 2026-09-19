@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Word Wizard content pipeline.
+"""Lexery content pipeline.
 
 Turns a raw Kaikki.org English Wiktionary JSONL extract into two SQLite
 databases:
@@ -27,6 +27,8 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+
+from spelling_variants import add_spelling_variants
 
 try:
     from wordfreq import zipf_frequency
@@ -208,6 +210,19 @@ def clean_form(form: dict) -> tuple[str, str] | None:
     return text, ",".join(tags) if tags else "form"
 
 
+# The crossword list the daily-word pool is filtered through; the app's
+# bundled copy, since that is what it is checked against.
+CROSSWORD_WORDLIST = Path(__file__).resolve().parents[2] / "assets" / "crossword" / "wordlist.tsv"
+
+
+def _add_daily_words(conn: sqlite3.Connection) -> int:
+    # Imported here rather than at the top: daily_words takes the advanced
+    # vocabulary seed from this module, and the other way round would loop.
+    from daily_words import add_daily_words
+
+    return add_daily_words(conn, CROSSWORD_WORDLIST)
+
+
 def build_full_db(input_path: Path, db_path: Path) -> None:
     if db_path.exists():
         db_path.unlink()
@@ -357,6 +372,10 @@ def build_full_db(input_path: Path, db_path: Path) -> None:
     conn.commit()
     log("building examples FTS5 index...")
     add_examples_fts(conn)
+    log("consolidating spelling variants...")
+    log(f"  {add_spelling_variants(conn)} variant spellings folded into their words")
+    log("choosing the word-of-the-day pool...")
+    log(f"  {_add_daily_words(conn)} words")
 
     conn.execute("PRAGMA user_version = 1")
     conn.execute("VACUUM")
@@ -413,6 +432,8 @@ def build_core_db(full_db_path: Path, core_db_path: Path, core_size: int) -> Non
     conn.execute("INSERT INTO entries_fts(rowid, headword) SELECT id, headword FROM entries")
     conn.commit()
     add_examples_fts(conn)
+    add_spelling_variants(conn)
+    _add_daily_words(conn)
     conn.execute("DETACH DATABASE full_db")
     conn.execute("PRAGMA user_version = 1")
     conn.execute("VACUUM")

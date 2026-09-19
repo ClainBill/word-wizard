@@ -166,7 +166,7 @@ class ReaderPeekPanel extends ConsumerWidget {
                   const SizedBox(width: 8),
                   FilledButton.tonalIcon(
                     icon: Icon(studying ? Icons.check : Icons.school_outlined, size: 18),
-                    label: Text(studying ? 'Studying' : 'Study'),
+                    label: Text(studying ? 'In Lexery' : 'Add to Lexery'),
                     onPressed: studying
                         ? null
                         : () async {

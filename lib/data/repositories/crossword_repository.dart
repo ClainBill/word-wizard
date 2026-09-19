@@ -624,6 +624,10 @@ class CrosswordRepository {
       // stored on the puzzle: (seed, size, weekday, srsWords, blockedAnswers)
       // is the whole of a puzzle's identity.
       seed: seed ?? Object.hash(date, difficulty.storageKey),
+      // The budgets were set against release builds. Under the debug JIT
+      // the same search runs several times slower and a Midi or Mega would
+      // simply run out of time — and then be reported as "no puzzle".
+      budgetScale: kDebugMode ? _debugBudgetScale : 1.0,
     );
 
     // Real CPU-bound backtracking search — up to seconds on a Mega grid — so
@@ -631,8 +635,22 @@ class CrosswordRepository {
     // a top-level function (see _runGenerateInIsolate) rather than an inline
     // closure, which would drag `this` and its unsendable database
     // connection across the boundary.
-    return _runGenerateInIsolate(request);
+    final clock = Stopwatch()..start();
+    final puzzle = await _runGenerateInIsolate(request);
+    // Generation failing is silent otherwise, and its duration is the one
+    // number that says whether a budget is the reason.
+    debugPrint(
+      'crossword ${difficulty.storageKey}: '
+      '${puzzle == null ? 'no puzzle' : '${puzzle.words.length} words'} '
+      'in ${clock.elapsedMilliseconds} ms '
+      '(seed ${request.seed}, ${srsWords.length} study words, '
+      'budget ×${request.budgetScale})',
+    );
+    return puzzle;
   }
+
+  /// How much longer a debug build gets, see `_generate`.
+  static const double _debugBudgetScale = 5.0;
 
   // -------------------------------------------------------------------
   // The editorial pass (PORTING_SPEC.md §9.3-§9.4)
@@ -683,7 +701,11 @@ class CrosswordRepository {
     }
     try {
       final weekday = DateTime.parse(date).weekday;
-      final result = await _reviewService.review(puzzle, weekday: weekday);
+      final result = await _reviewService.review(
+        puzzle,
+        weekday: weekday,
+        puzzleKey: 'puzzle-$puzzleId-${puzzle.seed}',
+      );
       final verdict = result.verdict;
 
       if (result.error.isNotEmpty) {

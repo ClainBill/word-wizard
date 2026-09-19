@@ -30,6 +30,10 @@ void main() {
       CREATE TABLE dict.forms (
         id INTEGER PRIMARY KEY, entry_id INTEGER NOT NULL, form_text TEXT NOT NULL,
         form_type TEXT NOT NULL)''');
+    await db.customStatement('''
+      CREATE TABLE dict.spelling_variants (
+        variant TEXT NOT NULL, headword TEXT NOT NULL, label TEXT NOT NULL,
+        PRIMARY KEY (variant, headword))''');
     await db.customStatement('CREATE INDEX dict.idx_entries_headword ON entries(headword)');
     await db.customStatement('CREATE INDEX dict.idx_forms_form_text ON forms(form_text)');
 
@@ -58,6 +62,13 @@ void main() {
     await entry(6, 'Paris', 'proper noun', 9000, 'capital of France');
     await entry(7, 'luminescent', 'adj', 150000, 'emitting light');
     await entry(8, 'word', 'noun', 400, 'a unit of language');
+    // "colour" is a stub whose only sense points at "color"; the pipeline
+    // records that in spelling_variants and the page treats it as "color".
+    await entry(9, 'color', 'noun', 500, 'the spectral composition of light');
+    await entry(10, 'colour', 'noun', 20000, 'Commonwealth and Ireland standard spelling of color.');
+    await db.customStatement(
+      "INSERT INTO dict.spelling_variants (variant, headword, label) VALUES ('colour', 'color', 'Commonwealth and Ireland')",
+    );
 
     repo = ReaderRepository(db);
   });
@@ -98,6 +109,17 @@ void main() {
       expect(word.entryId, 3);
       expect(word.lemma?.headword, 'run');
       expect(word.lemma?.entryId, 2);
+    });
+
+    test('a variant spelling resolves to the word it is a spelling of', () async {
+      final blocks = blocksFromPlainText('A colour, or a color.');
+      final analysis = await repo.analyze(blocks);
+      final text = blocks.single.text;
+      final byText = {for (final t in analysis.blocks.single) t.token.textIn(text): t.word};
+      expect(byText['colour']!.headword, 'color');
+      expect(byText['colour']!.entryId, 9);
+      expect(byText['colour']!.gloss, 'the spectral composition of light');
+      expect(byText['color']!.entryId, 9);
     });
 
     test('empty text analyzes to empty blocks', () async {

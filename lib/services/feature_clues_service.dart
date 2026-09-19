@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+
+import 'ai_gateway.dart';
 import 'api_key_store.dart';
 
 /// Generates 2-3 short "semantic feature" clues about a word's meaning for
@@ -12,13 +14,13 @@ import 'api_key_store.dart';
 /// the headword itself, so answering them takes genuine recall rather than
 /// picking from a list.
 ///
-/// Same development-only calling convention as `CrosswordReviewService`:
-/// docs/APP_INTEGRATION.md §4 says never ship an API key in the app, so this
-/// only calls OpenAI directly in debug builds, with the key supplied at
-/// build time via `--dart-define-from-file=.env`. A shipping build should
-/// route this through a backend proxy instead — [proxyUrl] is that seam.
-/// [isConfigured] is false, and the recall game simply isn't offered,
-/// without a key or proxy — the same path as no network or a rejected key.
+/// A signed-in user goes through [AiGateway] — the `ai-feature-clues` Edge
+/// Function holds the key, the prompt, the model and the quota. Without an
+/// account the development convention applies, as `CrosswordReviewService`
+/// documents: OpenAI is called directly only in debug builds with the key
+/// from `--dart-define-from-file=.env`, or with a key the user pasted into
+/// Settings. [isConfigured] is false, and the recall game simply isn't
+/// offered, with none of those — the same path as no network.
 class FeatureCluesService {
   static const String defaultModel = 'gpt-5-mini';
 
@@ -43,7 +45,7 @@ class FeatureCluesService {
     return key.isEmpty ? null : key;
   }
 
-  bool get isConfigured => proxyUrl != null || _apiKey != null;
+  bool get isConfigured => AiGateway.instance.signedIn || proxyUrl != null || _apiKey != null;
 
   static const _timeout = Duration(seconds: 12);
 
@@ -66,6 +68,22 @@ synonym or near-synonym. Reply with strict JSON of the shape
     required String pos,
     required String gloss,
   }) async {
+    if (AiGateway.instance.signedIn) {
+      try {
+        final result = await AiGateway.instance.call(
+          'ai-feature-clues',
+          {'headword': headword, 'pos': pos, 'gloss': gloss},
+          timeout: _timeout + const Duration(seconds: 5),
+        );
+        return _parseClues(result.content, headword);
+      } on AiGatewayException catch (e) {
+        // Quota, outage, no network: the game type just isn't available
+        // for this word, which is what an empty list means to the caller.
+        debugPrint('feature clues (gateway): ${e.failure.name} ${e.message}');
+        return const [];
+      }
+    }
+
     final key = _apiKey;
     final url = proxyUrl ?? 'https://api.openai.com/v1/chat/completions';
     if (proxyUrl == null && key == null) return const [];
@@ -104,10 +122,22 @@ synonym or near-synonym. Reply with strict JSON of the shape
       final content = message is Map ? message['content'] : null;
       if (content is! String) return const [];
 
+      return _parseClues(content, headword);
+    } catch (error) {
+      debugPrint('feature clues: $error');
+      return const [];
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// The model's `{"clues": [...]}`, minus anything that gives the word
+  /// away. Empty on malformed content.
+  static List<String> _parseClues(String content, String headword) {
+    try {
       final parsed = jsonDecode(content);
       final rawClues = parsed is Map ? parsed['clues'] : null;
       if (rawClues is! List) return const [];
-
       final lowerHeadword = headword.toLowerCase();
       return rawClues
           .whereType<String>()
@@ -115,11 +145,8 @@ synonym or near-synonym. Reply with strict JSON of the shape
           .where((c) => c.isNotEmpty && !c.toLowerCase().contains(lowerHeadword))
           .take(3)
           .toList();
-    } catch (error) {
-      debugPrint('feature clues: $error');
+    } catch (_) {
       return const [];
-    } finally {
-      client.close(force: true);
     }
   }
 }

@@ -41,7 +41,7 @@ enum RecallGameKind {
   /// Syllable beats, opening letter and a rhyme — sound only, no meaning.
   soundShape,
 
-  /// Scrambled letter tiles to drop back into place.
+  /// The word spelled out on a small keyboard of its letters and decoys.
   anagram,
 
   /// LLM-written clues that circle the meaning without naming the word.
@@ -74,7 +74,7 @@ enum RecallGameKind {
         RecallGameKind.letterTiles => 'Crack the word',
         RecallGameKind.cloze => 'Fill the gap',
         RecallGameKind.soundShape => 'Sound it out',
-        RecallGameKind.anagram => 'Unscramble it',
+        RecallGameKind.anagram => 'Spell it out',
         RecallGameKind.featureClues => 'Guess from the clues',
         RecallGameKind.meaningCards => 'Which meaning is it?',
         RecallGameKind.sentenceFit => 'Where does it belong?',
@@ -85,7 +85,7 @@ enum RecallGameKind {
         RecallGameKind.letterTiles => Icons.grid_view_rounded,
         RecallGameKind.cloze => Icons.short_text_rounded,
         RecallGameKind.soundShape => Icons.graphic_eq_rounded,
-        RecallGameKind.anagram => Icons.shuffle_rounded,
+        RecallGameKind.anagram => Icons.keyboard_alt_outlined,
         RecallGameKind.featureClues => Icons.lightbulb_outline_rounded,
         RecallGameKind.meaningCards => Icons.style_outlined,
         RecallGameKind.sentenceFit => Icons.format_quote_rounded,
@@ -110,7 +110,7 @@ bool _isAvailable(RecallGameKind kind, StudyCard card) {
   return switch (kind) {
     RecallGameKind.letterTiles => alpha && letters.length >= 3,
     RecallGameKind.soundShape => alpha && letters.length >= 3,
-    // Longer than this and the tray is a wall of tiles rather than a puzzle.
+    // Longer than this and the slots are a wall of tiles rather than a puzzle.
     RecallGameKind.anagram => alpha && letters.length >= 3 && letters.length <= 11,
     RecallGameKind.cloze => clozePattern(card) != null && letters.length >= 2,
     RecallGameKind.sentenceFit => clozePattern(card) != null,
@@ -592,9 +592,39 @@ class _CuePill extends StatelessWidget {
   }
 }
 
-/// The word's own letters, shuffled into a tray. Tap to drop them into the
-/// slots, tap a slot to send its tile back. Checks itself the moment the
-/// last slot fills.
+/// English letters, commonest first (Lewand's ordering) — the pool
+/// [spellingKeys] draws its decoys from the top of.
+const _lettersByFrequency = 'etaoinshrdlcumwfgypbvkjxqz';
+
+/// The keys for spelling [target]: every distinct letter of the word plus
+/// decoys, in alphabetical order. The first version of this game laid the
+/// word's own letters out as a tray, which gave the whole letter set away —
+/// two E tiles and a Q narrowed "queue" to nothing. Now the keyboard
+/// neither confirms which letters are in the word nor how many times, and
+/// alphabetical order says nothing about the spelling.
+///
+/// Decoys are drawn from the commonest letters not in the word, which are
+/// far better at throwing a guess off than a Z would be, with a little
+/// randomness so the same word doesn't always get the same keyboard. A
+/// long word gets the whole alphabet: past a point a bigger keyboard is
+/// simpler than a subtly incomplete one.
+List<String> spellingKeys(String target, Random rand) {
+  final own = {for (final c in target.toLowerCase().split('')) if (RegExp('[a-z]').hasMatch(c)) c};
+  final decoyCount = own.length ~/ 2 + 4;
+  if (own.length + decoyCount >= 22) {
+    return [for (var c = 'a'.codeUnitAt(0); c <= 'z'.codeUnitAt(0); c++) String.fromCharCode(c)];
+  }
+  final pool = [for (final c in _lettersByFrequency.split('')) if (!own.contains(c)) c];
+  // The commonest twice as many as needed, shuffled, then trimmed — so a
+  // decoy is always a plausible letter and never always the same one.
+  final candidates = pool.take(decoyCount * 2).toList()..shuffle(rand);
+  return [...own, ...candidates.take(decoyCount)]..sort();
+}
+
+/// The word spelled out on a keyboard of its letters and some decoys (see
+/// [spellingKeys]). Tap a key to fill the next slot — keys can be used
+/// again, so a double letter isn't given away — and take one back with
+/// backspace. Checks itself the moment the last slot fills.
 class _AnagramGame extends StatefulWidget {
   final StudyCard card;
   final VoidCallback? onDone;
@@ -607,42 +637,36 @@ class _AnagramGame extends StatefulWidget {
 
 class _AnagramGameState extends State<_AnagramGame> {
   late final String _target;
-  late final List<String> _tray;
-  final List<int> _placed = [];
+  late final List<String> _keys;
+  final List<String> _typed = [];
   bool? _correct;
 
   @override
   void initState() {
     super.initState();
     _target = widget.card.headword.trim().replaceAll(RegExp('[^A-Za-z]'), '');
-    final letters = _target.split('')..shuffle(Random());
-    // A shuffle can land back in the original order by chance — reshuffle
-    // once so the puzzle isn't a no-op.
-    if (letters.join() == _target && _target.length > 1) letters.shuffle(Random());
-    _tray = letters;
+    _keys = spellingKeys(_target, Random());
   }
 
-  void _place(int trayIndex) {
-    if (_correct != null || _placed.contains(trayIndex)) return;
+  void _type(String letter) {
+    if (_correct != null || _typed.length >= _target.length) return;
     HapticFeedback.selectionClick();
-    setState(() => _placed.add(trayIndex));
-    if (_placed.length == _tray.length) {
-      final attempt = _placed.map((i) => _tray[i]).join();
-      final ok = attempt.toLowerCase() == _target.toLowerCase();
+    setState(() => _typed.add(letter));
+    if (_typed.length == _target.length) {
+      final ok = _typed.join().toLowerCase() == _target.toLowerCase();
       HapticFeedback.mediumImpact();
       setState(() => _correct = ok);
     }
   }
 
   void _takeBack() {
-    if (_correct != null || _placed.isEmpty) return;
-    setState(() => _placed.removeLast());
+    if (_correct != null || _typed.isEmpty) return;
+    setState(() => _typed.removeLast());
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final placedLetters = _placed.map((i) => _tray[i]).toList();
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -654,9 +678,9 @@ class _AnagramGameState extends State<_AnagramGame> {
           children: [
             for (var i = 0; i < _target.length; i++)
               _LetterTile(
-                letter: i < placedLetters.length ? placedLetters[i] : '',
+                letter: i < _typed.length ? _typed[i] : '',
                 state: _correct == null
-                    ? (i < placedLetters.length ? _TileState.filled : _TileState.empty)
+                    ? (i < _typed.length ? _TileState.filled : _TileState.empty)
                     : (_correct! ? _TileState.correct : _TileState.wrong),
               ),
           ],
@@ -668,17 +692,13 @@ class _AnagramGameState extends State<_AnagramGame> {
             spacing: 5,
             runSpacing: 5,
             children: [
-              for (var i = 0; i < _tray.length; i++)
-                _LetterTile(
-                  letter: _tray[i],
-                  state: _placed.contains(i) ? _TileState.used : _TileState.tray,
-                  onTap: () => _place(i),
-                ),
+              for (final key in _keys)
+                _LetterTile(letter: key, state: _TileState.tray, onTap: () => _type(key)),
             ],
           ),
           const SizedBox(height: 6),
           TextButton.icon(
-            onPressed: _placed.isEmpty ? null : _takeBack,
+            onPressed: _typed.isEmpty ? null : _takeBack,
             icon: const Icon(Icons.backspace_outlined, size: 14),
             label: const Text('Take one back', style: TextStyle(fontSize: 11)),
             style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
@@ -691,7 +711,7 @@ class _AnagramGameState extends State<_AnagramGame> {
           ),
         if (_correct == null)
           Text(
-            'Tap the letters in order',
+            'Tap the letters in order — not every key is in the word',
             style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant.withValues(alpha: 0.7)),
           ),
       ],
@@ -1100,7 +1120,7 @@ class _MeaningBuilderGameState extends State<_MeaningBuilderGame> {
 // Shared visual controls
 // ---------------------------------------------------------------------------
 
-enum _TileState { empty, filled, tray, used, correct, wrong }
+enum _TileState { empty, filled, tray, correct, wrong }
 
 class _LetterTile extends StatelessWidget {
   final String letter;
@@ -1116,11 +1136,6 @@ class _LetterTile extends StatelessWidget {
       _TileState.empty => (null, scheme.outlineVariant, null),
       _TileState.filled => (scheme.surface, scheme.primary, null),
       _TileState.tray => (scheme.surface, scheme.outlineVariant, null),
-      _TileState.used => (
-          scheme.surfaceContainerHighest.withValues(alpha: 0.3),
-          scheme.outlineVariant.withValues(alpha: 0.4),
-          scheme.onSurfaceVariant.withValues(alpha: 0.25),
-        ),
       _TileState.correct => (Colors.green.withValues(alpha: 0.18), Colors.green, null),
       _TileState.wrong => (Colors.red.withValues(alpha: 0.15), Colors.red, null),
     };

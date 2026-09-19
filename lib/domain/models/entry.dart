@@ -38,6 +38,26 @@ class WordForm {
   const WordForm({required this.formText, required this.formType});
 }
 
+/// Another way of writing a [WordEntry]'s headword — "colour" for "color",
+/// "shew" for "show" — with where or when it's used. Wiktionary files these
+/// as entries of their own whose only sense is "Commonwealth spelling of
+/// color"; the pipeline folds them into the word they point at (see
+/// `tool/pipeline/spelling_variants.py`), so a lookup of either spelling
+/// gives the one card.
+class SpellingVariant {
+  final String text;
+
+  /// "Commonwealth and Ireland", "archaic", "alternative", … — or
+  /// [misspellingLabel], which a card doesn't list.
+  final String label;
+
+  const SpellingVariant({required this.text, required this.label});
+
+  static const misspellingLabel = 'misspelling';
+
+  bool get isMisspelling => label == misspellingLabel;
+}
+
 /// All the senses that share a POS, within one [WordEntry].
 class PosSenses {
   final Pos pos;
@@ -62,6 +82,13 @@ class WordEntry {
   final List<PosSenses> posGroups;
   final List<WordForm> forms;
 
+  /// Other spellings of this word, commonest region first.
+  final List<SpellingVariant> variants;
+
+  /// The spelling this card was reached by when it wasn't [headword] —
+  /// "colour" when the card is "color" — so the screen can say so.
+  final String? lookedUpAs;
+
   const WordEntry({
     required this.canonicalEntryId,
     required this.headword,
@@ -69,7 +96,21 @@ class WordEntry {
     this.etymology,
     this.posGroups = const [],
     this.forms = const [],
+    this.variants = const [],
+    this.lookedUpAs,
   });
+
+  /// This card as reached by [spelling] rather than its own headword.
+  WordEntry reachedAs(String spelling) => WordEntry(
+        canonicalEntryId: canonicalEntryId,
+        headword: headword,
+        pronunciation: pronunciation,
+        etymology: etymology,
+        posGroups: posGroups,
+        forms: forms,
+        variants: variants,
+        lookedUpAs: spelling,
+      );
 
   /// Every example across every sense, flattened in display order — the
   /// source list for the capped-preview Examples section.

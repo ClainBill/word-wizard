@@ -2,7 +2,7 @@ name: word_wizard
 description: "Offline advanced-English vocabulary dictionary and SRS flashcards."
 publish_to: 'none'
 
-version: 0.1.0+1
+version: 1.0.0+1
 
 environment:
   sdk: ^3.11.5
@@ -41,6 +41,12 @@ dependencies:
 
   # The progress screen's share card
   share_plus: ^13.3.0
+
+  # Settings → "Report a bug / suggest a feature": attach a photo from the library
+  image_picker: ^1.1.2
+
+  # Accounts, premium and the AI proxy — see supabase/README.md
+  supabase_flutter: ^2.17.2
 
 dev_dependencies:
   flutter_test:

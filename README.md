@@ -1,4 +1,4 @@
-# Word Wizard
+# Lexery
 
 An offline, ad-free advanced-English vocabulary dictionary and flashcard app
 for Flutter — functionally reverse-engineered from renzo Inc.'s Japanese app,
@@ -55,7 +55,23 @@ sentences); to add the index without a full re-parse:
 
 ```
 python3 build_dictionary.py --add-examples-fts ../../assets/db/dictionary.db
-``` If you only changed
+```
+
+Two more tables are built in the same pass, and can likewise be added to an
+existing database on their own:
+
+- `spelling_variants` — every headword that is only another spelling of a
+  word ("colour" → "color", "shew" → "show"; 82k rows), so search and lookup
+  give one card whichever way a word is written and the card lists its
+  other spellings. `python3 spelling_variants.py ../../assets/db/dictionary.db`
+- `daily_words` — the curated word-of-the-day pool (~2,400 lemmas the
+  crossword list rates familiar and uncommon, plus the advanced-vocabulary
+  seed), walked one row a day. Needs the crossword word list:
+  `python3 daily_words.py ../../assets/db/dictionary.db ../../assets/crossword/wordlist.tsv`
+
+Either change to the bundled database needs `_assetVersion` in
+`lib/data/dictionary/dictionary_database.dart` bumped so installed copies
+are replaced. If you only changed
 `ADVANCED_VOCAB_SEED` or `--core-size` and already have
 `out/dictionary-full.db`, skip the slow re-parse with `--core-only`.
 
@@ -119,6 +135,14 @@ offline with no model calls:
 - **Themes.** `assets/hunt/themes.tsv` maps ~36 Wiktionary topics (music,
   law, at sea, …) to familiar words whose *primary* sense carries the topic.
   One topic per calendar day; every topic word on the board lights up.
+- **Hints.** A hint marks a random unfound word's start tile with an arrow
+  toward its second letter, and stays until the word is found; tapping the
+  arrowed tile repeats how long the word is. A board starts with two; every
+  bonus word found earns one more. Once half the required words are found,
+  the word counter unlocks for the rest of the board — each tile shows how
+  many remaining words start on it — and a popup says so. Hints mark a
+  solve as assisted; the halfway counter, being earned, does not. There is
+  no reveal, in either game: only clues and hints.
 
 Rebuild the three assets (`accepted.txt`, `main.txt`, `themes.tsv`) with:
 
@@ -228,6 +252,31 @@ table that will go stale — check OpenAI's pricing page before trusting a total
 A model missing from it reports no cost rather than a wrong one. Measured on a
 9x9: ~25 s, 1.6k in + 1.8k out, about $0.004 a puzzle.
 
+## Backend
+
+`supabase/` holds the server side: Postgres schema and row-level security,
+the quota-and-idempotency functions, and Edge Functions for the AI proxy,
+RevenueCat entitlements, feedback intake and account deletion. Its README
+has the setup; the app stays offline-first and only reaches for it for
+premium, AI and reports.
+
+The app picks its project with `--dart-define=ENV=dev|prod`
+(`lib/app/environment.dart`; dev is the default). Settings → Account signs
+in by email; a signed-in user's AI calls go through the backend with a
+daily allowance instead of needing an API key.
+
+## Bug reports and feature suggestions
+
+Settings → "Report a bug or suggest a feature" is an in-app form: a
+message, an optional link and reply address, and screenshots — the app
+keeps a snapshot of the last few screens the user was on, taken as each
+one is left, so the screen the bug was seen on is one tap away — or a
+photo from the library. Reports go to a small Google Apps Script relay
+that mails them to the developer; the setup is in `tool/feedback/`. Until
+a build has the relay's URL (`--dart-define=FEEDBACK_ENDPOINT=…` or
+`lib/services/feedback_config.dart`), reports wait in an on-device outbox
+and go out on the first launch that can send them.
+
 ## Running
 
 ```
@@ -235,3 +284,21 @@ flutter pub get
 dart run build_runner build --delete-conflicting-outputs
 flutter run
 ```
+
+To judge the games on a device, run `--profile` or `--release`. A debug build
+runs Dart under the JIT and the crossword and Word Hunt generators are
+several times slower in it; the crossword gives debug builds 5× its time
+budgets (`CrosswordRepository._debugBudgetScale`) so Midi and Mega still
+fill, but the timings mean nothing until AOT. Every generation logs its
+outcome and duration (`crossword midi: 30 words in 412 ms …`).
+
+### Release builds
+
+- Android signs with `android/key.properties` when it exists (see
+  `android/key.properties.example`), otherwise with the debug key.
+- Version and build number come from `version:` in `pubspec.yaml`, and the
+  version shown in Settings from `appVersion` in
+  `lib/services/feedback_config.dart`; bump both together.
+- No API key ships: the build-time `OPENAI_API_KEY` define is ignored in
+  release builds (`FeatureCluesService`, `CrosswordReviewService`), so a
+  release build only calls OpenAI with a key the user pasted into Settings.

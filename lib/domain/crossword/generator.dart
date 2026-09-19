@@ -37,6 +37,12 @@ class CrosswordGenerationRequest {
 
   final int seed;
 
+  /// Multiplies the difficulty's time budgets. The budgets were measured on
+  /// AOT-compiled release builds; a debug build runs the search under the
+  /// JIT, several times slower, and would otherwise give up on grids a
+  /// release build fills in well under a second.
+  final double budgetScale;
+
   const CrosswordGenerationRequest({
     required this.difficulty,
     required this.entries,
@@ -44,6 +50,7 @@ class CrosswordGenerationRequest {
     required this.blockedAnswers,
     required this.weekday,
     required this.seed,
+    this.budgetScale = 1.0,
   });
 }
 
@@ -61,6 +68,9 @@ class CrosswordIsolateRequest {
   final int weekday;
   final int seed;
 
+  /// See [CrosswordGenerationRequest.budgetScale].
+  final double budgetScale;
+
   const CrosswordIsolateRequest({
     required this.wordListSource,
     required this.difficulty,
@@ -68,6 +78,7 @@ class CrosswordIsolateRequest {
     required this.blockedAnswers,
     required this.weekday,
     required this.seed,
+    this.budgetScale = 1.0,
   });
 }
 
@@ -100,6 +111,7 @@ CrosswordPuzzle? generateCrosswordFromSource(CrosswordIsolateRequest request) {
     blockedAnswers: request.blockedAnswers,
     weekday: request.weekday,
     seed: request.seed,
+    budgetScale: request.budgetScale,
   ));
 }
 
@@ -134,7 +146,8 @@ CrosswordPuzzle? generateCrossword(
   final rng = Random(request.seed);
 
   final overall = Stopwatch()..start();
-  final overallBudget = difficulty.overallBudget;
+  final overallBudget = difficulty.overallBudget * request.budgetScale;
+  final solveBudget = difficulty.solveBudget * request.budgetScale;
 
   // §6.3: the index is built over the fill pool only. Every word in it is
   // recognizable *and* cluable, which is what makes any valid fill a
@@ -205,8 +218,7 @@ CrosswordPuzzle? generateCrossword(
       rng: rng,
       preAssigned: preAssigned,
       blockedAnswers: request.blockedAnswers,
-      timeBudget:
-          difficulty.solveBudget < remainingBudget ? difficulty.solveBudget : remainingBudget,
+      timeBudget: solveBudget < remainingBudget ? solveBudget : remainingBudget,
     );
     final result = solver.solve();
     if (result == null) continue;

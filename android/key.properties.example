@@ -1,0 +1,10 @@
+# Copy to android/key.properties (gitignored) once the upload keystore exists.
+# Create the keystore with:
+#   keytool -genkey -v -keystore ~/lexery-upload.jks -keyalg RSA -keysize 2048 \
+#     -validity 10000 -alias upload
+# Back the .jks and these passwords up somewhere durable: a lost upload key
+# means a Play support request to reset it.
+storeFile=../lexery-upload.jks
+storePassword=CHANGE_ME
+keyAlias=upload
+keyPassword=CHANGE_ME

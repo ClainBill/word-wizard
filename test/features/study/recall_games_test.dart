@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:word_wizard/domain/models/study_card.dart';
 import 'package:word_wizard/domain/models/study_direction.dart';
@@ -130,6 +132,41 @@ void main() {
       for (final chunk in glossChunks(gloss)!) {
         expect(chunk.trim(), isNotEmpty);
       }
+    });
+  });
+
+  group('spellingKeys', () {
+    test('holds every letter of the word once, plus decoys, in alphabetical order', () {
+      final keys = spellingKeys('letter', Random(1));
+      expect(keys.toSet(), containsAll(['l', 'e', 't', 'r']));
+      expect(keys.toSet().length, keys.length, reason: 'no key twice, whatever the word repeats');
+      expect(keys, [...keys]..sort());
+      // 4 own letters + (4 ~/ 2 + 4) decoys.
+      expect(keys.length, 10);
+    });
+
+    test('decoys are common letters and vary between deals', () {
+      final deals = {for (var i = 0; i < 20; i++) spellingKeys('muse', Random(i)).join()};
+      expect(deals.length, greaterThan(1));
+      for (final deal in deals) {
+        for (final c in deal.split('')) {
+          expect('etaoinshrdlcumwfgypbvkjxqz'.indexOf(c), lessThan(20), reason: '$c is a poor decoy');
+        }
+      }
+    });
+
+    test('a word with many distinct letters gets the whole alphabet', () {
+      final keys = spellingKeys('unpredictably', Random(3));
+      expect(keys.length, 26);
+      expect(keys.first, 'a');
+      expect(keys.last, 'z');
+    });
+
+    test('non-letters in the headword are ignored', () {
+      final keys = spellingKeys("ne'er-do-well", Random(0));
+      expect(keys, isNot(contains("'")));
+      expect(keys, isNot(contains('-')));
+      expect(keys.toSet(), containsAll(['n', 'e', 'r', 'd', 'o', 'w', 'l']));
     });
   });
 }

@@ -27,9 +27,21 @@ typedef HuntSession = ({
   /// Required words the player gave up on and was shown.
   Set<String> revealed,
 
-  /// Whether hint mode was ever switched on for this board. Like a reveal,
-  /// it makes the solve assisted: the board no longer ranks as clean.
+  /// Whether a hint was ever spent on this board. Like a reveal, it makes
+  /// the solve assisted: the board no longer ranks as clean.
   bool hinted,
+
+  /// Required words with a hint showing — start tile and first step — that
+  /// haven't been found yet.
+  Set<String> hints,
+
+  /// Hints spent so far. The budget is derived, not stored: the starting
+  /// allowance plus one per bonus word found, minus this.
+  int hintsUsed,
+
+  /// Whether the halfway unlock (per-tile start counts) has been announced,
+  /// so reopening the board doesn't announce it again.
+  bool halfwayAnnounced,
   bool completed,
 
   /// Active time already banked in earlier sittings.
@@ -57,6 +69,16 @@ typedef HuntHistoryEntry = ({
   HuntPlayState play,
 });
 
+/// What the progress JSON on a puzzle row decodes to.
+typedef _Progress = ({
+  Set<String> found,
+  Set<String> revealed,
+  bool hinted,
+  Set<String> hints,
+  int hintsUsed,
+  bool halfwayAnnounced,
+});
+
 const _acceptedAsset = 'assets/hunt/accepted.txt';
 const _mainAsset = 'assets/hunt/main.txt';
 const _themesAsset = 'assets/hunt/themes.tsv';
@@ -73,6 +95,27 @@ Future<HuntLexicon> _buildLexicon(HuntLexiconSources sources) =>
 
 Future<HuntGeneration> _generate(HuntIsolateRequest request) =>
     Isolate.run(() => generateHuntInIsolate(request));
+
+/// Hints a fresh board starts with; every bonus word found earns one more.
+const int huntStartingHints = 2;
+
+/// The hint budget left on a board: the starting allowance plus one per
+/// bonus word found, less what's been spent. Never negative.
+int huntHintsLeft(HuntPuzzle puzzle, Iterable<String> found, int hintsUsed) {
+  final bonus = found.where(puzzle.bonus.containsKey).length;
+  final left = huntStartingHints + bonus - hintsUsed;
+  return left < 0 ? 0 : left;
+}
+
+/// Whether half the required words are found — the point at which the
+/// per-tile start counts unlock.
+bool huntHalfwayReached(HuntPuzzle puzzle, Iterable<String> found) {
+  final total = puzzle.requiredCount;
+  if (total == 0) return false;
+  final foundRequired =
+      found.where((w) => puzzle.anchorWords.containsKey(w) || puzzle.main.containsKey(w)).length;
+  return foundRequired * 2 >= total;
+}
 
 /// The score a set of found words is worth on a puzzle: required words
 /// (anchors and main) score their length, bonus words one point each.
@@ -147,21 +190,35 @@ class HuntRepository {
       found: progress.found,
       revealed: progress.revealed,
       hinted: progress.hinted,
+      // A hint on a word since found has nothing left to point at.
+      hints: progress.hints.difference(progress.found),
+      hintsUsed: progress.hintsUsed,
+      halfwayAnnounced: progress.halfwayAnnounced,
       completed: row.completed,
       activeMs: play?.activeMs ?? 0,
     );
   }
 
-  ({Set<String> found, Set<String> revealed, bool hinted}) _decodeProgress(String json) {
+  _Progress _decodeProgress(String json) {
     try {
       final map = jsonDecode(json) as Map<String, dynamic>;
       return (
         found: {for (final w in map['found'] as List? ?? const []) w as String},
         revealed: {for (final w in map['revealed'] as List? ?? const []) w as String},
         hinted: map['hinted'] as bool? ?? false,
+        hints: {for (final w in map['hints'] as List? ?? const []) w as String},
+        hintsUsed: map['hintsUsed'] as int? ?? 0,
+        halfwayAnnounced: map['halfwayAnnounced'] as bool? ?? false,
       );
     } catch (_) {
-      return (found: const {}, revealed: const {}, hinted: false);
+      return (
+        found: const {},
+        revealed: const {},
+        hinted: false,
+        hints: const {},
+        hintsUsed: 0,
+        halfwayAnnounced: false,
+      );
     }
   }
 
@@ -201,6 +258,9 @@ class HuntRepository {
       found: const <String>{},
       revealed: const <String>{},
       hinted: false,
+      hints: const <String>{},
+      hintsUsed: 0,
+      halfwayAnnounced: false,
       completed: false,
       activeMs: 0,
     );
@@ -339,6 +399,9 @@ class HuntRepository {
     required Set<String> found,
     required Set<String> revealed,
     required bool hinted,
+    Set<String> hints = const {},
+    int hintsUsed = 0,
+    bool halfwayAnnounced = false,
     required bool completed,
   }) async {
     await (_db.update(_db.huntPuzzles)..where((t) => t.id.equals(puzzleId))).write(
@@ -347,6 +410,9 @@ class HuntRepository {
           'found': found.toList()..sort(),
           'revealed': revealed.toList()..sort(),
           'hinted': hinted,
+          'hints': hints.toList()..sort(),
+          'hintsUsed': hintsUsed,
+          'halfwayAnnounced': halfwayAnnounced,
         })),
         completed: Value(completed),
       ),

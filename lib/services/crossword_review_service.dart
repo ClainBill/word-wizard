@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../domain/crossword/crossword_models.dart';
 import '../domain/crossword/editorial.dart';
 
+import 'ai_gateway.dart';
 import 'api_key_store.dart';
 
 /// Asks a model to review a finished puzzle — PORTING_SPEC.md §9.3, and the
@@ -33,8 +34,12 @@ import 'api_key_store.dart';
 /// does nothing at all, which leaves the deterministic puzzle exactly as it
 /// was — the same path as no network, a timeout, or a rejected key.
 ///
-/// [proxyUrl] is the seam a backend drops into: point it at your own endpoint
-/// and the key never leaves your server. That is what a shipping build needs.
+/// That backend now exists: a signed-in user's review goes through
+/// [AiGateway] to the `ai-crossword-review` Edge Function, which holds the
+/// key, the editor's brief, the model and the quota, and never bills the
+/// same puzzle twice. The direct path below is what remains for
+/// development without an account. [proxyUrl] is an older seam for an
+/// endpoint speaking OpenAI's own shape; kept, unused by the app.
 ///
 /// Everything about this pass is optional by construction. It never gates a
 /// puzzle, and [review] returns an empty verdict on **any** failure.
@@ -121,7 +126,7 @@ class CrosswordReviewService {
     return key.isEmpty ? null : (key, '.env key ${ApiKeyStore.mask(key)}');
   }
 
-  bool get isConfigured => proxyUrl != null || _apiKey != null;
+  bool get isConfigured => AiGateway.instance.signedIn || proxyUrl != null || _apiKey != null;
 
   /// Scales the deadline with the puzzle.
   ///
@@ -137,7 +142,13 @@ class CrosswordReviewService {
   Future<CrosswordReviewResult> review(
     CrosswordPuzzle puzzle, {
     required int weekday,
+    /// Identifies this puzzle to the backend so a retry, or a second tap,
+    /// gets the stored verdict instead of a second bill. Only used through
+    /// the gateway.
+    String? puzzleKey,
   }) async {
+    if (AiGateway.instance.signedIn) return _reviewViaGateway(puzzle, weekday, puzzleKey);
+
     final source = _keySource;
     final key = source?.$1;
     final url = proxyUrl ?? 'https://api.openai.com/v1/chat/completions';
@@ -186,6 +197,46 @@ class CrosswordReviewService {
       // Closes the underlying socket if the deadline fired mid-request; the
       // response, if any, is discarded.
       client.close(force: true);
+    }
+  }
+
+  Future<CrosswordReviewResult> _reviewViaGateway(
+    CrosswordPuzzle puzzle,
+    int weekday,
+    String? puzzleKey,
+  ) async {
+    final clock = Stopwatch()..start();
+    try {
+      final result = await AiGateway.instance.call(
+        'ai-crossword-review',
+        {
+          'puzzle_id': puzzleKey ?? 'seed-${puzzle.seed}-${puzzle.words.length}',
+          'rendered': renderForReview(puzzle, weekday: weekday),
+          'word_count': puzzle.words.length,
+        },
+        // The function bounds its own call; this only has to outlast it.
+        timeout: timeoutFor(puzzle) + const Duration(seconds: 15),
+      );
+      return (
+        verdict: parseVerdict(result.content),
+        model: result.model.isEmpty ? model : result.model,
+        promptTokens: result.promptTokens,
+        completionTokens: result.completionTokens,
+        reasoningTokens: result.reasoningTokens,
+        latencyMs: clock.elapsedMilliseconds,
+        error: '',
+      );
+    } on AiGatewayException catch (e) {
+      // The strip under the app bar shows this, so say which it was.
+      final why = switch (e.failure) {
+        AiGatewayFailure.quotaExceeded => 'daily AI limit reached',
+        AiGatewayFailure.unavailable => 'AI editor unavailable right now',
+        AiGatewayFailure.inProgress => 'already being reviewed',
+        AiGatewayFailure.notSignedIn => 'not signed in',
+        AiGatewayFailure.network || AiGatewayFailure.other => 'gateway: ${e.message}',
+      };
+      debugPrint('crossword review (gateway): ${e.failure.name} ${e.message}');
+      return _failed(why, latencyMs: clock.elapsedMilliseconds);
     }
   }
 

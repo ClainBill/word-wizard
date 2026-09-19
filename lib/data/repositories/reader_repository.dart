@@ -261,13 +261,16 @@ class ReaderRepository {
       final rows = await _db.customSelect(
         '''
         WITH c(w) AS (VALUES $values)
-        SELECT c.w AS spelling, e.headword AS headword, 0 AS via_form, e.frequency_rank AS rank
+        SELECT c.w AS spelling, e.headword AS headword, 0 AS via, e.frequency_rank AS rank
         FROM c JOIN dict.entries e ON e.headword = c.w
         UNION ALL
         SELECT c.w, e.headword, 1, e.frequency_rank
         FROM c
         JOIN dict.forms f ON f.form_text = c.w
         JOIN dict.entries e ON e.id = f.entry_id
+        UNION ALL
+        SELECT c.w, v.headword, 2, NULL
+        FROM c JOIN dict.spelling_variants v ON v.variant = c.w
         ''',
         variables: [for (final s in chunk) Variable.withString(s)],
       ).get();
@@ -275,10 +278,16 @@ class ReaderRepository {
         final spelling = r.read<String>('spelling');
         final headword = r.read<String>('headword');
         final match = result.putIfAbsent(spelling, _SpellingMatch.new);
-        if (r.read<int>('via_form') == 0) {
-          match.direct = headword;
-        } else {
-          match.lemmas.add((headword: headword, rank: r.readNullable<int>('rank')));
+        switch (r.read<int>('via')) {
+          // A word that is only another spelling of one ("colour") is that
+          // word ("color") on the page, whatever order the rows come in.
+          case 2:
+            match.direct = headword;
+            match.directIsVariantTarget = true;
+          case 0:
+            if (!match.directIsVariantTarget) match.direct = headword;
+          default:
+            match.lemmas.add((headword: headword, rank: r.readNullable<int>('rank')));
         }
       }
     }
@@ -388,6 +397,10 @@ class ReaderListInfo {
 
 class _SpellingMatch {
   String? direct;
+
+  /// [direct] is the word a variant spelling points at, which a row for the
+  /// variant's own stub entry must not overwrite.
+  bool directIsVariantTarget = false;
   final lemmas = <({String headword, int? rank})>[];
 }
 

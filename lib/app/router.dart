@@ -1,6 +1,7 @@
 import 'package:go_router/go_router.dart';
 
 import '../domain/crossword/crossword_models.dart';
+import '../services/feedback_service.dart' show FeedbackKind;
 import '../features/entry/entry_detail_screen.dart';
 import '../features/games/crossword_banned_answers_screen.dart';
 import '../features/games/crossword_history_screen.dart';
@@ -14,6 +15,8 @@ import '../features/reader/reader_edit_screen.dart';
 import '../features/reader/reader_history_screen.dart';
 import '../features/reader/reader_screen.dart';
 import '../features/search/search_screen.dart';
+import '../features/settings/feedback_screen.dart';
+import '../features/settings/licences_screen.dart';
 import '../features/settings/settings_screen.dart';
 import '../features/progress/progress_screen.dart';
 import '../features/study/manage_study_screen.dart';
@@ -21,10 +24,16 @@ import '../features/study/study_screen.dart';
 import '../features/study/study_session_screen.dart';
 import 'shell.dart';
 
+const String _home = String.fromEnvironment('INITIAL_ROUTE', defaultValue: '/search');
+
 final appRouter = GoRouter(
   // `--dart-define=INITIAL_ROUTE=/games/hunt` opens straight onto a screen,
   // for testing on a device without tapping through.
-  initialLocation: const String.fromEnvironment('INITIAL_ROUTE', defaultValue: '/search'),
+  initialLocation: _home,
+  // Nothing outside the app should be able to strand it on an error page.
+  // A location the router doesn't know — a deep link that slipped through,
+  // the platform's bare "/" on a cold start from a link — goes home.
+  onException: (_, state, router) => router.go(_home),
   routes: [
     // Entry Detail is reachable from every tab, so it's pushed on the root
     // navigator rather than nested inside a single shell branch.
@@ -41,6 +50,16 @@ final appRouter = GoRouter(
         final listId = state.uri.queryParameters['listId'];
         return StudySessionScreen(listId: listId == null ? null : int.parse(listId));
       },
+    ),
+    // Report a bug / suggest a feature. On the root navigator, full
+    // screen: it's a form, and the tab bar would only take space from it.
+    GoRoute(
+      path: '/feedback',
+      builder: (context, state) => FeedbackScreen(
+        initialKind: state.uri.queryParameters['kind'] == 'feature'
+            ? FeedbackKind.feature
+            : FeedbackKind.bug,
+      ),
     ),
     GoRoute(
       path: '/study/manage',
@@ -129,7 +148,16 @@ final appRouter = GoRouter(
           GoRoute(path: '/games', builder: (context, state) => const GamesScreen()),
         ]),
         StatefulShellBranch(routes: [
-          GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
+          GoRoute(
+            path: '/settings',
+            builder: (context, state) => const SettingsScreen(),
+            routes: [
+              GoRoute(
+                path: 'licences',
+                builder: (context, state) => const LicencesScreen(),
+              ),
+            ],
+          ),
         ]),
       ],
     ),

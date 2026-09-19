@@ -1,0 +1,96 @@
+# Supabase CLI configuration. `supabase start` runs the whole stack locally
+# (needs Docker); `supabase link` + `db push` / `functions deploy` target a
+# hosted project. Keep this file environment-neutral: the dev and prod
+# projects differ only in which one is linked and which secrets are set.
+
+project_id = "lexery"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage"]
+extra_search_path = ["public"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 17
+
+[db.migrations]
+enabled = true
+
+[studio]
+enabled = true
+port = 54323
+
+[storage]
+enabled = true
+file_size_limit = "16MiB"
+
+[auth]
+enabled = true
+# Update to the real scheme once the app registers a deep link for
+# magic-link / OAuth callbacks (see README, "Auth providers").
+site_url = "lexery://auth"
+additional_redirect_urls = ["lexery://auth", "http://127.0.0.1:54321"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+enable_signup = true
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+# One code an hour per address is plenty for a sign-in; it also stops the
+# form being used to spam an inbox.
+max_frequency = "1m0s"
+otp_length = 6
+otp_expiry = 3600
+
+# The sign-in mail. The app accepts either the link in it or a code typed
+# in; the default template has only the link. To send the code as well
+# (supabase/templates/magic_link.html), the project needs custom SMTP —
+# the free tier's default provider refuses template changes and only
+# delivers to the org's own members. Gmail SMTP with an app password is
+# enough for dev (README, "Email"); then uncomment and `config push`.
+# [auth.email.template.magic_link]
+# subject = "Your Lexery sign-in code"
+# content_path = "./supabase/templates/magic_link.html"
+
+# Providers are configured in the dashboard for hosted projects (client ids
+# and secrets are not committed). Locally, set them in supabase/.env.
+[auth.external.apple]
+enabled = false
+client_id = "env(APPLE_CLIENT_ID)"
+secret = "env(APPLE_SECRET)"
+
+[auth.external.google]
+enabled = false
+client_id = "env(GOOGLE_CLIENT_ID)"
+secret = "env(GOOGLE_SECRET)"
+
+[edge_runtime]
+enabled = true
+policy = "per_worker"
+
+# RevenueCat calls the webhook with our shared secret, not a Supabase JWT.
+[functions.revenuecat-webhook]
+verify_jwt = false
+
+[functions.ai-crossword-review]
+verify_jwt = true
+
+[functions.ai-feature-clues]
+verify_jwt = true
+
+[functions.entitlement-refresh]
+verify_jwt = true
+
+# Anonymous callers carry the anon key, which passes the gateway's JWT
+# check; the function then resolves whether there is a real user.
+[functions.feedback]
+verify_jwt = true
+
+[functions.delete-account]
+verify_jwt = true

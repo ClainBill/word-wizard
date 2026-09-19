@@ -7,6 +7,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../domain/models/daily_word.dart';
 import '../../domain/models/entry.dart';
 import '../../domain/study/quiz_example.dart';
 
@@ -122,7 +123,7 @@ class DictionaryDatabase extends _$DictionaryDatabase {
   // devices holding an already-copied (and now stale) database file — e.g.
   // an install from before the full dictionary replaced the 469-entry
   // curated core set — re-copy instead of silently keeping the old data.
-  static const _assetVersion = '2-full';
+  static const _assetVersion = '3-variants';
 
   static Future<String> resolveFilePath() async {
     final dir = await getApplicationSupportDirectory();
@@ -214,7 +215,60 @@ class DictionaryDatabase extends _$DictionaryDatabase {
         Variable.withInt(limit),
       ],
     ).get();
-    return rows.map(_summaryFromRow).toList();
+    return _foldVariants(rows.map(_summaryFromRow).toList());
+  }
+
+  /// Replaces every result that is only another spelling of a word
+  /// ("colour", whose one sense is "Commonwealth spelling of color") with
+  /// that word's own row, tagged with the spelling that matched, so the
+  /// two never sit in the list as separate words. Rows already there for
+  /// the target keep their place; a folded row keeps the variant's.
+  Future<List<EntrySummary>> _foldVariants(List<EntrySummary> rows) async {
+    if (rows.isEmpty) return rows;
+    final placeholders = rows.map((_) => '?').join(',');
+    final variantRows = await customSelect(
+      'SELECT variant, headword FROM spelling_variants WHERE variant IN ($placeholders)',
+      variables: [for (final r in rows) Variable.withString(r.headword)],
+    ).get();
+    if (variantRows.isEmpty) return rows;
+    final targetByVariant = {
+      for (final r in variantRows) r.read<String>('variant'): r.read<String>('headword'),
+    };
+    final targets = await _summariesForHeadwords(targetByVariant.values.toSet());
+
+    final seen = <String>{};
+    final out = <EntrySummary>[];
+    for (final row in rows) {
+      final target = targetByVariant[row.headword];
+      final replacement = target == null ? row : targets[target]?.withMatchedForm(row.headword);
+      if (replacement == null) continue;
+      if (seen.add(replacement.headword)) out.add(replacement);
+    }
+    return out;
+  }
+
+  /// One best-ranked row per headword, the shape [search] returns.
+  Future<Map<String, EntrySummary>> _summariesForHeadwords(Set<String> headwords) async {
+    if (headwords.isEmpty) return const {};
+    final placeholders = headwords.map((_) => '?').join(',');
+    final rows = await customSelect(
+      '''
+      SELECT m.id, m.headword, m.pos,
+             (SELECT gloss FROM senses WHERE entry_id = m.id ORDER BY sense_order LIMIT 1) AS gloss
+      FROM (
+        SELECT e.id, e.headword, e.pos,
+               ROW_NUMBER() OVER (
+                 PARTITION BY e.headword
+                 ORDER BY (e.frequency_rank IS NULL), e.frequency_rank
+               ) AS rn
+        FROM entries e
+        WHERE e.headword IN ($placeholders)
+      ) m
+      WHERE m.rn = 1
+      ''',
+      variables: [for (final h in headwords) Variable.withString(h)],
+    ).get();
+    return {for (final r in rows) r.read<String>('headword'): _summaryFromRow(r)};
   }
 
   /// Resolves an inflected surface form ("ran") back to its lemma, deduped
@@ -245,7 +299,9 @@ class DictionaryDatabase extends _$DictionaryDatabase {
       ''',
       variables: [Variable.withString(trimmed), Variable.withString(trimmed.toLowerCase())],
     ).get();
-    return rows.map(_summaryFromRow).toList();
+    // "colours" is a form of the "colour" stub, which is itself only a
+    // spelling of "color" — the same fold as a search result gets.
+    return _foldVariants(rows.map(_summaryFromRow).toList());
   }
 
   static EntrySummary _summaryFromRow(QueryRow r) => EntrySummary(
@@ -595,11 +651,69 @@ class DictionaryDatabase extends _$DictionaryDatabase {
     return result;
   }
 
+  /// The first day the pool is counted from. Only its own arithmetic
+  /// depends on it — moving it would give every date a different word.
+  static final _dailyEpoch = DateTime(2026, 1, 1);
+
+  /// The word for [day], from the curated `daily_words` pool: the pool is
+  /// walked in order, one row per day, wrapping round at the end. Null on a
+  /// database built before the pool existed.
+  Future<DailyWord?> wordOfTheDay(DateTime day) async {
+    final local = DateTime(day.year, day.month, day.day);
+    final countRow = await customSelect(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'daily_words'",
+    ).getSingle();
+    if (countRow.read<int>('n') == 0) return null;
+    final poolRow = await customSelect('SELECT COUNT(*) AS n FROM daily_words').getSingle();
+    final poolSize = poolRow.read<int>('n');
+    if (poolSize == 0) return null;
+    final dayIndex = local.difference(_dailyEpoch).inDays;
+    final id = ((dayIndex % poolSize) + poolSize) % poolSize + 1;
+    final row = await customSelect(
+      '''
+      SELECT d.entry_id, d.headword, e.pos, s.gloss,
+             (SELECT x.text FROM examples x WHERE x.sense_id = s.id LIMIT 1) AS example
+      FROM daily_words d
+      JOIN entries e ON e.id = d.entry_id
+      JOIN senses s ON s.entry_id = e.id
+      WHERE d.id = ?
+      ORDER BY (example IS NULL), s.sense_order
+      LIMIT 1
+      ''',
+      variables: [Variable.withInt(id)],
+    ).getSingleOrNull();
+    if (row == null) return null;
+    return DailyWord(
+      day: local,
+      entryId: row.read<int>('entry_id'),
+      headword: row.read<String>('headword'),
+      pos: row.read<String>('pos'),
+      gloss: row.read<String>('gloss'),
+      example: row.readNullable<String>('example'),
+    );
+  }
+
   /// Loads every (headword, pos) row for [headword] and merges them into one
   /// [WordEntry] — the unit the Entry Detail screen renders. The best-ranked
   /// row (lowest frequency_rank) becomes `canonicalEntryId`, the single id
   /// this word uses for studying, listing, and notes.
+  ///
+  /// A headword that is only another spelling of a word ("colour") loads
+  /// that word's card instead, with `lookedUpAs` saying which spelling
+  /// was asked for; every card lists its other spellings in `variants`.
   Future<WordEntry?> loadWord(String headword) async {
+    final variantRow = await customSelect(
+      'SELECT headword FROM spelling_variants WHERE variant = ?',
+      variables: [Variable.withString(headword)],
+    ).getSingleOrNull();
+    if (variantRow != null) {
+      final target = await _loadHeadword(variantRow.read<String>('headword'));
+      return target?.reachedAs(headword);
+    }
+    return _loadHeadword(headword);
+  }
+
+  Future<WordEntry?> _loadHeadword(String headword) async {
     final entryRows = await customSelect(
       '''
       SELECT id, pos, etymology FROM entries
@@ -655,6 +769,25 @@ class DictionaryDatabase extends _$DictionaryDatabase {
       variables: idVars,
     ).get();
 
+    // Regional spellings first ("Commonwealth" before "archaic"), then the
+    // rest alphabetically, misspellings last — the order a card lists them.
+    final variantRows = await customSelect(
+      'SELECT variant, label FROM spelling_variants WHERE headword = ? ORDER BY variant',
+      variables: [Variable.withString(headword)],
+    ).get();
+    final variants = [
+      for (final r in variantRows)
+        SpellingVariant(text: r.read<String>('variant'), label: r.read<String>('label')),
+    ]..sort((a, b) {
+        int tier(SpellingVariant v) => v.isMisspelling
+            ? 2
+            : v.label.isNotEmpty && v.label[0] == v.label[0].toUpperCase()
+                ? 0
+                : 1;
+        final byTier = tier(a).compareTo(tier(b));
+        return byTier != 0 ? byTier : a.text.compareTo(b.text);
+      });
+
     final posOrder = <String>[];
     final sensesByPos = <String, List<Sense>>{};
     for (final er in entryRows) {
@@ -705,6 +838,7 @@ class DictionaryDatabase extends _$DictionaryDatabase {
                 formType: r.read<String>('form_type'),
               ))
           .toList(),
+      variants: variants,
     );
   }
 }

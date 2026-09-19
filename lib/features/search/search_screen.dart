@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/providers.dart';
 import '../../domain/models/entry.dart';
 import '../../widgets/entry_card.dart';
+import '../../widgets/pos_tag.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key});
@@ -88,7 +89,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Word Wizard'),
+        title: const Text('Lexery'),
         centerTitle: false,
       ),
       body: Column(
@@ -164,9 +165,98 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-/// What was searched before, shown while the field is empty. Tapping one
-/// re-runs it; the swipe and the clear action are there because a search
-/// history nobody can edit is a small embarrassment waiting to happen.
+/// Today's featured word, on the Search tab above the recent searches.
+/// Tap it for the card; the button underneath goes to the Games tab, where
+/// the day's puzzles are.
+class _WordOfTheDayCard extends ConsumerWidget {
+  const _WordOfTheDayCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final word = ref.watch(wordOfTheDayProvider(today)).valueOrNull;
+    if (word == null) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => context.push('/entry/${Uri.encodeComponent(word.headword)}?from=search'),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.wb_sunny_outlined, size: 16, color: scheme.primary),
+                    const SizedBox(width: 6),
+                    Text(
+                      'WORD OF THE DAY',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: scheme.primary,
+                        letterSpacing: 1.2,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Flexible(child: Text(word.headword, style: theme.textTheme.headlineSmall)),
+                    const SizedBox(width: 8),
+                    PosTag(word.pos),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(word.gloss, maxLines: 3, overflow: TextOverflow.ellipsis),
+                if (word.example != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    word.example!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontStyle: FontStyle.italic,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => ref.read(ttsProvider).speak(word.headword),
+                      icon: const Icon(Icons.volume_up_outlined, size: 18),
+                      label: const Text('Say it'),
+                    ),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: () => context.go('/games'),
+                      icon: const Icon(Icons.extension_outlined, size: 18),
+                      label: const Text('Today\'s puzzles'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// What was searched before, shown while the field is empty, under the
+/// word of the day. Tapping one re-runs it; the swipe and the clear action
+/// are there because a search history nobody can edit is a small
+/// embarrassment waiting to happen.
 class _RecentSearches extends ConsumerWidget {
   final ValueChanged<String> onPick;
 
@@ -175,23 +265,29 @@ class _RecentSearches extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final recent = ref.watch(recentSearchesProvider).valueOrNull ?? const <String>[];
-    if (recent.isEmpty) return const _EmptyState(hasQuery: false);
     final scheme = Theme.of(context).colorScheme;
     return ListView(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
-          child: Row(
-            children: [
-              Text('Recent', style: Theme.of(context).textTheme.labelLarge),
-              const Spacer(),
-              TextButton(
-                onPressed: () => ref.read(progressRepositoryProvider).clearSearches(),
-                child: const Text('Clear'),
-              ),
-            ],
+        const _WordOfTheDayCard(),
+        if (recent.isEmpty)
+          const Padding(
+            padding: EdgeInsets.only(top: 24),
+            child: _EmptyState(hasQuery: false),
           ),
-        ),
+        if (recent.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+            child: Row(
+              children: [
+                Text('Recent', style: Theme.of(context).textTheme.labelLarge),
+                const Spacer(),
+                TextButton(
+                  onPressed: () => ref.read(progressRepositoryProvider).clearSearches(),
+                  child: const Text('Clear'),
+                ),
+              ],
+            ),
+          ),
         for (final query in recent)
           Dismissible(
             key: ValueKey('recent-$query'),

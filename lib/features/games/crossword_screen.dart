@@ -13,9 +13,6 @@ import '../progress/progress_format.dart';
 
 String _cellKey(int row, int col) => '$row,$col';
 
-/// How much of the grid a reveal hands over.
-enum _RevealScope { letter, word, puzzle }
-
 class CrosswordScreen extends ConsumerStatefulWidget {
   final CrosswordDifficulty difficulty;
 
@@ -66,8 +63,11 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
   final Set<String> _wrongCells = {};
 
   /// Grid-form answers with at least one cell the user was given rather than
-  /// worked out. These are deliberately *not* held back from future puzzles:
-  /// a revealed answer was not discovered, so it must come back, because the
+  /// worked out. Nothing on the screen reveals any more — the menu that did
+  /// was cut before release — but puzzles solved with it before that keep
+  /// their record, so an assisted solve from then never shows as clean.
+  /// Those answers are deliberately *not* held back from future puzzles: a
+  /// revealed answer was not discovered, so it must come back, because the
   /// user still needs to learn it (PORTING_SPEC.md §6.2a).
   final Set<String> _revealedAnswers = {};
 
@@ -579,83 +579,20 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
     setState(() => _completed = true);
   }
 
-  /// Fills in cells the user hasn't worked out, and records that they were
-  /// given rather than solved.
-  ///
-  /// [scope] of `letter` fills the selected cell, `word` the selected entry,
-  /// `puzzle` everything. Every answer touching a filled-in cell is marked
-  /// revealed — a partially revealed answer was still not discovered unaided,
-  /// so it is not held back from later puzzles.
-  /// Asks once, before the first reveal on a puzzle, whether to give up
-  /// the clean solve. Returns true when it's fine to go ahead — immediately
-  /// if the puzzle is already assisted or finished.
-  Future<bool> _confirmAssist(String action) async {
-    if (_revealedAnswers.isNotEmpty || _completed) return true;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('$action?'),
-        content: const Text(
-          'Revealing marks this puzzle as assisted: it won\'t count as a clean solve, '
-          'it\'s left out of your best times, and revealed answers aren\'t counted as learned.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Keep going')),
-          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: Text(action)),
-        ],
-      ),
-    );
-    return ok == true && mounted;
-  }
-
-  Future<void> _reveal(_RevealScope scope) async {
-    final label = switch (scope) {
-      _RevealScope.letter => 'Reveal letter',
-      _RevealScope.word => 'Reveal word',
-      _RevealScope.puzzle => 'Reveal puzzle',
-    };
-    if (!await _confirmAssist(label)) return;
-    final targets = <(int, int)>[];
-    switch (scope) {
-      case _RevealScope.letter:
-        final cell = _selectedCell;
-        if (cell == null) return;
-        final parts = cell.split(',');
-        targets.add((int.parse(parts[0]), int.parse(parts[1])));
-      case _RevealScope.word:
-        final word = _activeWord;
-        if (word == null) return;
-        targets.addAll(word.cells);
-      case _RevealScope.puzzle:
-        for (final word in _clueOrder) {
-          targets.addAll(word.cells);
-        }
-    }
-
-    setState(() {
-      for (final target in targets) {
-        final key = _cellKey(target.$1, target.$2);
-        final answer = _answers[key];
-        if (answer == null) continue;
-        if (_filled[key] == answer) continue; // already correct: no help given
-        _filled[key] = answer;
-        final words = _cellWords[key];
-        for (final word in [words?.across, words?.down]) {
-          if (word != null) _revealedAnswers.add(word.answer);
-        }
-      }
-      _wrongCells.clear();
-    });
-    _saveProgress();
-    _checkCompletion();
-  }
-
   void _check() {
     setState(() {
       _wrongCells
         ..clear()
         ..addAll(_answers.entries.where((e) => _filled[e.key] != null && _filled[e.key] != e.value).map((e) => e.key));
     });
+  }
+
+  /// A new seed, without the "replaces today's puzzle" confirmation:
+  /// there is no puzzle to lose.
+  Future<void> _retryGeneration() async {
+    await ref.read(crosswordRepositoryProvider).regenerate(widget.difficulty);
+    if (!mounted) return;
+    ref.invalidate(crosswordSessionProvider(_sessionKey));
   }
 
   Future<void> _regenerate() async {
@@ -718,17 +655,6 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
           if (sessionAsync.valueOrNull != null) _StudyPoolBadge(puzzle: sessionAsync.valueOrNull!.puzzle),
           if (sessionAsync.valueOrNull != null)
             IconButton(icon: const Icon(Icons.fact_check_outlined), tooltip: 'Check', onPressed: _check),
-          if (sessionAsync.valueOrNull != null)
-            PopupMenuButton<_RevealScope>(
-              icon: const Icon(Icons.visibility_outlined),
-              tooltip: 'Reveal',
-              onSelected: _reveal,
-              itemBuilder: (context) => const [
-                PopupMenuItem(value: _RevealScope.letter, child: Text('Reveal letter')),
-                PopupMenuItem(value: _RevealScope.word, child: Text('Reveal word')),
-                PopupMenuItem(value: _RevealScope.puzzle, child: Text('Reveal puzzle')),
-              ],
-            ),
           if (widget.puzzleId == null)
             IconButton(icon: const Icon(Icons.refresh), tooltip: 'New puzzle', onPressed: _regenerate),
           IconButton(
@@ -739,10 +665,29 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
         ],
       ),
       body: sessionAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              Text(
+                widget.puzzleId == null
+                    ? 'Building today\'s ${widget.difficulty.label}…'
+                    : 'Loading…',
+                style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
         error: (e, _) => Center(child: Text('Couldn\'t build a puzzle: $e')),
         data: (session) {
           if (session == null) {
+            // A null from generation means the search ran out of time
+            // before it found a fill — it never means the study pool is
+            // short, since a puzzle needs no study words at all. Another
+            // seed usually succeeds, so offer one.
+            final fresh = widget.puzzleId == null;
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
@@ -752,18 +697,27 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
                     Icon(Icons.extension_outlined, size: 56, color: Theme.of(context).colorScheme.primary),
                     const SizedBox(height: 16),
                     Text(
-                      widget.puzzleId == null ? 'Not enough words yet' : 'Puzzle not found',
+                      fresh ? 'Couldn\'t build a puzzle' : 'Puzzle not found',
                       style: Theme.of(context).textTheme.titleLarge,
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      widget.puzzleId == null
-                          ? 'Add more words to your study pool to unlock this puzzle size.'
+                      fresh
+                          ? 'The ${widget.difficulty.label} grid didn\'t fill in time. '
+                              'Try again — a different grid usually works.'
                           : 'This puzzle has been deleted.',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
                     ),
+                    if (fresh) ...[
+                      const SizedBox(height: 20),
+                      FilledButton.icon(
+                        onPressed: _retryGeneration,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Try again'),
+                      ),
+                    ],
                   ],
                 ),
               ),
