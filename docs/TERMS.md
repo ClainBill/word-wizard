@@ -1,19 +1,18 @@
-# Lexery terms of use
+# Word Wizard terms of use
 
-> **Draft — for the current offline, free app.** Have it looked over before
-> publishing, and extend it when purchases, accounts or shared puzzles
-> arrive (subscription terms, account rules, acceptable-use rules for
-> user-visible names and shared content).
+> **Draft.** Have it looked over before publishing. Covers the free app,
+> accounts and Premium purchases; extend it when shared puzzles arrive
+> (acceptable-use rules for user-visible names and shared content).
 
 *Last updated: 15 September 2026*
 
-These terms apply to the Lexery app ("the app"), made by William Gill
+These terms apply to the Word Wizard app ("the app"), made by William Gill
 ("we"). By installing or using the app you agree to them. The app store you
 got the app from has its own terms, which also apply.
 
 ## The app
 
-Lexery is a dictionary, flashcard and word-game app for learning English
+Word Wizard is a dictionary, flashcard and word-game app for learning English
 vocabulary. It works offline. Some optional features can use an AI model
 through your own OpenAI account; those are subject to OpenAI's terms, and any
 cost they incur is between you and OpenAI.
@@ -35,6 +34,41 @@ licences govern that content, not these terms.
 
 Your own words, notes and readings stay yours. We claim no rights in them,
 and they stay on your device.
+
+## Premium and purchases
+
+Some features — the daily personalized crosswords with their AI editorial
+pass, Word Hunt, the recall games in study sessions, shared friend groups and
+an ad-free experience — are part of *Premium*, sold through the
+App Store or Google Play as a monthly or yearly subscription, or as a
+one-time *Founding Member* purchase.
+
+Prices are shown in the store's currency before you buy. Subscriptions
+renew automatically until you cancel them in your store account's
+subscription settings, at least 24 hours before the current period ends.
+Refunds are handled by the store under its rules.
+
+The Founding Member purchase is a one-time payment for *lifetime* Premium.
+"Lifetime" means Premium access for as long as the current app and its
+online service continue to operate; it is not a promise that the company,
+the service or every feature will exist forever. It is tied to your store
+account and, once linked, your app account, is non-transferable, and is
+subject to reasonable fair-use limits on server-generated content. It covers
+the Premium features described in the app and their ordinary improvements,
+not necessarily a separate future product or a materially different paid
+service. Founding Member places are limited to 500 completed purchases.
+
+If Premium ends, your words, progress and any shared-group data are kept;
+only the Premium features stop until you subscribe again.
+
+## Groups
+
+Group puzzles let you pool words with people you invite. Choose a name for
+yourself that isn't offensive or impersonating anyone, and share invite
+codes only with people you're happy to see your shared words. Group owners
+may remove members; we may remove groups or members that misuse the feature.
+Leaving a group removes your shared words; deleting a group removes it for
+everyone.
 
 ## Feedback
 

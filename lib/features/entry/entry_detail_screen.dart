@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
 import '../../data/repositories/study_repository.dart' show SenseChoices, StudyRepository;
+import '../../widgets/ad_banner.dart';
+import '../premium/premium_prompt.dart';
 import '../../domain/models/entry.dart';
 import '../../widgets/add_to_list_sheet.dart';
 import '../../widgets/ipa_label.dart';
@@ -28,8 +30,9 @@ final _noteProvider = StreamProvider.family<String?, int>(
 class EntryDetailScreen extends ConsumerStatefulWidget {
   final String headword;
 
-  /// True when the Search tab opened this — the one path that counts as
-  /// looking the word up (see `LookupLog`). Logged here rather than on the
+  /// True when the Search tab opened this — a result, or a tile on the
+  /// landing board — the one path that counts as looking the word up (see
+  /// `LookupLog`). Logged here rather than on the
   /// result tap so the lookup carries the word's canonical id, which only
   /// the loaded entry knows.
   final bool fromSearch;
@@ -53,18 +56,34 @@ class _EntryDetailScreenState extends ConsumerState<EntryDetailScreen> {
   Widget build(BuildContext context) {
     final wordAsync = ref.watch(_wordProvider(widget.headword));
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Entry')),
-      body: wordAsync.when(
-        data: (word) {
-          if (word == null) return const Center(child: Text('Entry not found.'));
-          _logLookup(word);
-          return WordBody(word: word);
-        },
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Couldn\'t load entry: $e')),
+    return PopScope(
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) _afterLeaving(context);
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Entry')),
+        body: wordAsync.when(
+          data: (word) {
+            if (word == null) return const Center(child: Text('Entry not found.'));
+            _logLookup(word);
+            return WordBody(word: word);
+          },
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(child: Text('Couldn\'t load entry: $e')),
+        ),
       ),
     );
+  }
+
+  /// A word milestone reached here is prompted for once this screen has
+  /// gone (spec §5.3) — on the navigator that outlives it.
+  void _afterLeaving(BuildContext context) {
+    final milestone = ref.read(premiumPromptsProvider).pendingMilestone;
+    if (milestone == null) return;
+    final root = Navigator.of(context, rootNavigator: true).context;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (root.mounted) maybeShowPremiumPrompt(root, trigger: 'milestone_$milestone');
+    });
   }
 }
 
@@ -127,11 +146,15 @@ class WordBody extends ConsumerWidget {
                   onPressed: studying
                       ? null
                       : () async {
-                          await ref
-                              .read(studyRepositoryProvider)
-                              .ensureCard(word.canonicalEntryId, ref.read(studyDirectionsProvider));
+                          final directions = ref.read(studyDirectionsProvider);
+                          final repo = ref.read(studyRepositoryProvider);
+                          await repo.ensureCard(word.canonicalEntryId, directions);
                           ref.invalidate(_isStudyingProvider(word.canonicalEntryId));
                           ref.invalidate(dueCountProvider);
+                          // The 10th, 25th, 50th word is a moment for the
+                          // Premium prompt — after leaving this screen.
+                          final total = (await repo.watchStats(directions).first).total;
+                          ref.read(premiumPromptsProvider).noteWordCount(total);
                         },
                 ),
                 loading: () => const FilledButton(onPressed: null, child: Text('…')),
@@ -160,6 +183,10 @@ class WordBody extends ConsumerWidget {
             onHoldLonger: (sense) =>
                 _toggleExclude(ref, sense, studying: studying, choices: choices),
           ),
+
+        // The free tier's banner, inline with the card, above the origin.
+        // Nothing (no gap) for Premium.
+        const AdBanner(inline: true),
 
         // 3. Etymology
         if (word.etymology != null) ...[

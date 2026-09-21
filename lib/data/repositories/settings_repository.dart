@@ -225,4 +225,25 @@ class SettingsRepository {
           SettingsCompanion.insert(key: crosswordReviewKey, value: enabled.toString()),
         );
   }
+
+  // -------------------------------------------------------------------
+  // Premium
+  // -------------------------------------------------------------------
+
+  /// The unsolicited-prompt bookkeeping of `domain/premium/prompt_policy`
+  /// as JSON: sessions, dismissals and when things last happened.
+  static const premiumPromptStateKey = 'premium_prompt_state';
+
+  Future<String?> premiumPromptState() async {
+    final row = await (_db.select(_db.settings)
+          ..where((t) => t.key.equals(premiumPromptStateKey)))
+        .getSingleOrNull();
+    return row?.value;
+  }
+
+  Future<void> setPremiumPromptState(String json) {
+    return _db.into(_db.settings).insertOnConflictUpdate(
+          SettingsCompanion.insert(key: premiumPromptStateKey, value: json),
+        );
+  }
 }

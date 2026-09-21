@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -129,6 +131,51 @@ void main() {
       expect(g.unfinished, 1);
       expect(g.best, const Duration(seconds: 60));
       expect(g.median, const Duration(seconds: 90));
+    });
+
+    test('words solved and partial progress come from each puzzle\'s own state', () async {
+      // A tiny grid: two across words and one down, as the app stores them.
+      Map<String, dynamic> word(int n, String dir, int row, int col, String answer) => {
+            'number': n, 'slotId': n, 'direction': dir, 'row': row, 'col': col,
+            'answer': answer, 'display': answer, 'entryId': -1, 'clue': '', 'clueType': 'W',
+            'freqZipf': 4.0, 'fromStudyPool': false,
+          };
+      final grid = {
+        'width': 3, 'height': 2, 'qualityScore': 1.0, 'anchors': <String>[], 'seed': 1, 'reviewed': false,
+        'words': [word(1, 'across', 0, 0, 'CAT'), word(2, 'across', 1, 0, 'ART'), word(3, 'down', 0, 0, 'CA')],
+      };
+      Future<int> puzzle(Map<String, String> filled, {bool completed = false}) =>
+          db.into(db.crosswordPuzzles).insert(CrosswordPuzzlesCompanion.insert(
+                puzzleDate: '2026-09-20',
+                difficulty: 'mini',
+                gridJson: jsonEncode(grid),
+                progressJson: Value(jsonEncode(filled)),
+                completed: Value(completed),
+              ));
+      // Finished: all three words. Part done: CAT filled; ART and the down
+      // word CA (needs row 1) are not.
+      final a = await puzzle({'0,0': 'C', '0,1': 'A', '0,2': 'T', '1,0': 'A', '1,1': 'R', '1,2': 'T'},
+          completed: true);
+      final b = await puzzle({'0,0': 'C', '0,1': 'A', '0,2': 'T'});
+      final c = await puzzle({}); // opened, nothing typed: not "in progress"
+      for (final (ref, done) in [(a, true), (b, false), (c, false)]) {
+        await db.into(db.gameResults).insert(GameResultsCompanion.insert(
+              game: 'crossword',
+              difficulty: const Value('mini'),
+              refId: ref,
+              activeMs: const Value(60000),
+              completedAt: Value(done ? DateTime.now() : null),
+            ));
+      }
+
+      final s = await repo.watchSummary(_w2m).first;
+      final g = s.games.single;
+      expect(g.wordsSolved, 3 + 1);
+      expect(g.unfinished, 2);
+      // Only the puzzle with progress is averaged: 1 of 3 words.
+      expect(g.unfinishedProgress, closeTo(1 / 3, 0.001));
+      expect(s.gamesWordsSolved, 4);
+      expect(s.gamesTime, const Duration(minutes: 3));
     });
 
     test('repeat lookups surface words looked up more than once', () async {

@@ -1,6 +1,8 @@
-# Lexery
+# Word Wizard
 
-An offline, ad-free advanced-English vocabulary dictionary and flashcard app
+> **Naming.** The app is *Word Wizard*. *Lexery* is the in-app name for the store of words you're studying and know ("Add to Lexery"), and the URL scheme / backend project id keep the `lexery` identifier.
+
+An offline advanced-English vocabulary dictionary and flashcard app
 for Flutter — functionally reverse-engineered from renzo Inc.'s Japanese app,
 retargeted from Japanese-for-English-speakers to advanced-English-for-fluent-
 speakers. See `docs/DESIGN.md` for the full product & technical design doc
@@ -43,6 +45,36 @@ curl -L -o raw/kaikki-english.jsonl \
 python3 build_dictionary.py --input raw/kaikki-english.jsonl --out out/
 cp out/dictionary-full.db ../../assets/db/dictionary.db
 ```
+
+### How the dictionary ships
+
+It is deliberately *not* a Flutter asset (`pubspec.yaml`), because a
+470 MB file in `flutter_assets` had to be loaded whole into memory and
+copied out on first launch, and put the Android base module far over
+Play's 200 MB cap. Instead (`lib/data/dictionary/dictionary_installer.dart`):
+
+- **Android** — an install-time Play Asset Delivery pack
+  (`android/dictionary_pack`, whose asset is a symlink to `assets/db/`).
+  Play installs it with the app; the first launch streams it out to app
+  storage through the `word_wizard/dictionary` channel in `MainActivity`,
+  with progress on the launch screen, and later launches reuse the copy.
+  Gradle only packs asset packs into *bundles*, so `flutter build apk` and
+  `flutter run` fold the same file into the base APK's assets instead
+  (`android/app/build.gradle.kts`) — same path for the app, either way.
+  For Play, build an AAB: `flutter build appbundle`.
+- **iOS** — a bundle resource of the Runner target (`project.pbxproj`),
+  opened by sqlite in place, read-only. No copy, no second 470 MB on disk.
+
+Bump `DictionaryDatabase._assetVersion` when the database changes so
+installed Android copies are refreshed.
+
+### Launch
+
+`main()` puts the launch screen (`lib/app/launch_screen.dart`) up first
+and opens the databases, keystore and backend behind it, then swaps in
+the app. Release builds show the first frame in about two seconds on a
+fresh install; debug builds are much slower to first frame because the
+engine loads the JIT kernel, which has nothing to do with the app.
 
 `out/dictionary-core.db` is a smaller frequency-ranked subset kept for dev
 use; the app itself loads the full database.
@@ -252,6 +284,79 @@ table that will go stale — check OpenAI's pricing page before trusting a total
 A model missing from it reports no cost rather than a wrong one. Measured on a
 9x9: ~25 s, 1.6k in + 1.8k out, about $0.004 a puzzle.
 
+## Premium
+
+Sold per *docs/Premium Offers Implementation Specification*: monthly and
+annual subscriptions and a one-time Founding Member purchase capped at 500.
+Free accounts get the dictionary, Reader, lists, plain flashcards and a
+labelled sample Mini crossword (no AI editor), with ads; Premium adds the
+daily games, the AI editor, the study recall games and no ads; the Games tab opens the paywall (`/premium`) on every
+visit and shows the locked catalogue behind it. Code: `lib/domain/premium`
+(model, prompt policy), `lib/services/purchases_service.dart` (RevenueCat
+behind an interface, with an in-memory fake for debug builds without a
+key), `lib/features/premium` (paywall, preview, prompt, legal pages).
+Founder inventory is server-side — see `supabase/README.md`.
+
+## Group puzzles (v1.1)
+
+See `docs/Group Puzzles v1.1.md`. Tables and RPCs in
+`supabase/migrations/20260920000000_groups.sql`; app code in
+`lib/domain/groups`, `lib/services/groups_api.dart`,
+`lib/services/group_puzzle_service.dart` (device-side generation from the
+pool, first-writer-wins publish, score upload) and `lib/features/groups`.
+
+## Accounts
+
+Optional; for Premium, the AI editor, groups and the leaderboard. One
+sheet (`lib/features/account/sign_in_sheet.dart`, opened from Settings and
+wherever an account is needed) offers Apple, Google and email — a link and
+a six-digit code, no password. `AuthService` (`lib/services/auth_service.dart`)
+does Apple natively on iOS and Google natively when the OAuth client ids
+are defined at build time, and falls back to Supabase's hosted OAuth flow in
+the browser otherwise; `supabase/README.md` → Auth providers has the setup.
+
+## The landing board
+
+The Search tab lands on a crossword-style board of Scrabble-like tiles
+that grows outward from the word of the day, a word every quarter second,
+until it runs out of room or words (`lib/domain/board/word_board.dart` is
+the model and grower, `lib/features/search/word_board_view.dart` the
+canvas). Drag and pinch to explore; tap a tile to open its word (a
+crossing asks which). Tiles are tinted by the Lexery — plain for new
+words, one tint for words being studied, a stronger one for mastered —
+so the board turns more and more familiar as the person learns. Words
+come from the curated daily pool and the middle of the frequency range
+(`DictionaryDatabase.boardWords`), with a few of their own words mixed
+in. Tapping the search field swaps it for the recent searches; leaving
+the field empty brings it back.
+
+## Leaderboard
+
+Games → Leaderboard (the strip at the top of the tab): puzzle points this
+week and all time. Anyone can look; scores go up only for accounts that
+opted in under a public name (Settings → Account → Leaderboard name).
+Rules in `lib/domain/games/scoring.dart`; upload in
+`lib/services/score_sync.dart`; server side in `supabase/README.md`.
+
+## Progress
+
+Settings-free: the Progress screen (Study tab) counts words got right in
+any puzzle, finished or not, time spent in puzzle screens, and how far
+unfinished puzzles got, alongside the study numbers. "I've mastered this
+word" on a review card sends a word to the mastered state on a 120-day
+interval. The undo arrow in the session header (and "Undo last grade" on
+the recap) takes back the most recent grade — SM-2 state restored, the
+review row deleted — and puts the card back on screen
+(`StudyRepository.ungrade`).
+
+## Ads
+
+Free accounts see an AdMob banner under word cards and an interstitial when
+a review session ends; Premium removes both. `lib/services/ads_service.dart`
+is the seam; Google's test unit ids are compiled in until real ones are
+passed with `--dart-define` (see `lib/services/ads_config.dart`), and the
+app ids in AndroidManifest.xml / Info.plist are Google's test ids to replace.
+
 ## Backend
 
 `supabase/` holds the server side: Postgres schema and row-level security,
@@ -299,6 +404,20 @@ outcome and duration (`crossword midi: 30 words in 412 ms …`).
 - Version and build number come from `version:` in `pubspec.yaml`, and the
   version shown in Settings from `appVersion` in
   `lib/services/feedback_config.dart`; bump both together.
-- No API key ships: the build-time `OPENAI_API_KEY` define is ignored in
-  release builds (`FeatureCluesService`, `CrosswordReviewService`), so a
-  release build only calls OpenAI with a key the user pasted into Settings.
+- No API key ships: the build-time `OPENAI_API_KEY` define is ignored
+  unless dev tools are on (`FeatureCluesService`, `CrosswordReviewService`),
+  so a store build only calls OpenAI with a key the user pasted into Settings.
+
+### A fast build with the developer tools
+
+A release build is AOT-compiled and compressed — the one to judge speed
+and the games on a phone — but normally drops the developer conveniences.
+`--dart-define=DEV_TOOLS=true` (`AppEnvironment.devTools`, on by default
+in debug builds) keeps them: the in-memory store with the "Debug: fake
+Premium" switch, prompt-cooldown reset and open-paywall tiles in Settings,
+the fake founder count, and the `.env` OpenAI key. Never for the stores.
+
+```
+flutter build apk --release --target-platform android-arm64 \
+  --dart-define=DEV_TOOLS=true --dart-define-from-file=.env
+```

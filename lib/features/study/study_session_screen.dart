@@ -7,11 +7,14 @@ import 'package:go_router/go_router.dart';
 import '../../app/providers.dart';
 import '../../domain/models/study_card.dart';
 import '../../domain/models/study_direction.dart';
+import '../../data/repositories/study_repository.dart' show StudyRepository;
 import '../../domain/srs/sm2.dart';
 import '../../widgets/ipa_label.dart';
 import '../../widgets/pos_tag.dart';
 import '../../widgets/tappable_word_text.dart';
 import '../../widgets/word_detail_sheet.dart';
+import '../premium/paywall_screen.dart';
+import '../premium/premium_prompt.dart';
 import 'card_motion.dart';
 import 'recall_games.dart';
 import 'study_options_sheet.dart';
@@ -68,6 +71,36 @@ class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
   /// is shown in place of the session, and "Keep going" clears it again.
   bool _ended = false;
 
+  /// Whether the last grade can still be taken back: true right after a
+  /// grade, false once the queue has been reshaped underneath it (a word
+  /// mastered or removed), since then `_index - 1` is no longer that card.
+  bool _canUndo = false;
+
+  /// Takes back the most recent grade: the card's SM-2 state is restored,
+  /// its review row deleted, and the card comes back on screen turned
+  /// over, ready to be graded again.
+  Future<void> _undo() async {
+    if (!_canUndo || _reviews.isEmpty) return;
+    final last = _reviews.last;
+    await ref.read(studyRepositoryProvider).ungrade(last.card);
+    ref.invalidate(dueCountProvider);
+    if (!mounted) return;
+    setState(() {
+      _reviews.removeLast();
+      if (last.grade == Grade.again) {
+        final i = _missed.lastIndexOf(last.card);
+        if (i >= 0) _missed.removeAt(i);
+      }
+      _index -= 1;
+      _stage = _Stage.back;
+      _exitToRight = false;
+      _ended = false;
+      _missedRoundDone = false;
+      _cardShownAt = DateTime.now();
+      _canUndo = _reviews.isNotEmpty;
+    });
+  }
+
   final DateTime _startedAt = DateTime.now();
   DateTime? _lastGradedAt;
 
@@ -78,6 +111,24 @@ class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
   DateTime _cardShownAt = DateTime.now();
 
   Duration get _elapsed => (_lastGradedAt ?? _startedAt).difference(_startedAt);
+
+  /// Leaves the session, then — a finished review being a fair moment
+  /// (spec §5.3), never before or between cards — offers Premium if the
+  /// policy allows.
+  ///
+  /// Free accounts see an interstitial here first — the one place the app
+  /// plays one — and then no Premium prompt on top of it: one monetisation
+  /// surface per moment (spec §5.4).
+  Future<void> _finish(BuildContext context) async {
+    final root = Navigator.of(context, rootNavigator: true).context;
+    final adShown = await ref.read(adsServiceProvider).showInterstitial(placement: 'review_end');
+    if (!context.mounted) return;
+    context.pop();
+    if (adShown) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (root.mounted) maybeShowPremiumPrompt(root, trigger: 'review_complete');
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -109,9 +160,15 @@ class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
           data: (queue) {
             _queue ??= queue;
             final cards = _queue!;
-            if (cards.isEmpty) return const _NothingDue();
+            // Empty from the start: nothing due. Emptied mid-session (the
+            // last card mastered or removed): the recap of what was done.
+            if (cards.isEmpty && _reviews.isEmpty) return const _NothingDue();
+            // The recall games — the jog before the answer, the exercise on
+            // the back, the round on missed words — are Premium. Free
+            // accounts get the plain flip card.
+            final premium = ref.watch(isPremiumProvider);
             if (_index >= cards.length) {
-              if (_missed.length >= 2 && !_missedRoundDone) {
+              if (premium && _missed.length >= 2 && !_missedRoundDone) {
                 return _MissedWordsRound(
                   cards: _missed,
                   onDone: () => setState(() => _missedRoundDone = true),
@@ -121,7 +178,8 @@ class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
                 reviews: _reviews,
                 remaining: 0,
                 elapsed: _elapsed,
-                onDone: () => context.pop(),
+                onDone: () => _finish(context),
+                onUndo: _canUndo && _reviews.isNotEmpty ? _undo : null,
               );
             }
             if (_ended) {
@@ -129,7 +187,8 @@ class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
                 reviews: _reviews,
                 remaining: cards.length - _index,
                 elapsed: _elapsed,
-                onDone: () => context.pop(),
+                onDone: () => _finish(context),
+                onUndo: _canUndo && _reviews.isNotEmpty ? _undo : null,
                 onResume: () => setState(() {
                   _ended = false;
                   _cardShownAt = DateTime.now();
@@ -145,8 +204,10 @@ class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
                 context,
                 progress: (done: _index, total: cards.length, grades: _grades),
               ),
+              premium: premium,
+              onUndo: _canUndo && _reviews.isNotEmpty ? _undo : null,
               onKnewIt: () => setState(() => _stage = _Stage.back),
-              onDidntKnowIt: () => setState(() => _stage = _Stage.game),
+              onDidntKnowIt: () => setState(() => _stage = premium ? _Stage.game : _Stage.back),
               onGameDone: () => setState(() => _stage = _Stage.back),
               exitToRight: _exitToRight,
               onGrade: (grade, {bool toRight = false}) async {
@@ -164,7 +225,48 @@ class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
                   _exitToRight = toRight;
                   _index += 1;
                   _stage = _Stage.front;
+                  _canUndo = true;
                 });
+              },
+              onMaster: () async {
+                final card = cards[_index];
+                final repo = ref.read(studyRepositoryProvider);
+                final messenger = ScaffoldMessenger.of(context);
+                await repo.masterEntry(card.entryId);
+                ref.invalidate(dueCountProvider);
+                ref.invalidate(studyStatsProvider);
+                if (!context.mounted) return;
+                // Both directions are mastered together, so both leave
+                // the queue.
+                final rest = cards.where((c) => c.entryId != card.entryId).toList();
+                _canUndo = false;
+                if (rest.length <= _index) {
+                  // That was the last card: back to the Study tab (or the
+                  // recap, if anything was graded first) rather than an
+                  // empty session.
+                  if (_reviews.isEmpty) {
+                    context.pop();
+                  } else {
+                    setState(() {
+                      _queue = rest;
+                      _ended = true;
+                    });
+                  }
+                } else {
+                  setState(() {
+                    _queue = rest;
+                    _stage = _Stage.front;
+                    _cardShownAt = DateTime.now();
+                  });
+                }
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      '"${card.headword}" marked as mastered — it comes back for a check in '
+                      '${StudyRepository.masteredIntervalDays ~/ 30} months.',
+                    ),
+                  ),
+                );
               },
               onRemove: () async {
                 final card = cards[_index];
@@ -204,6 +306,7 @@ class _StudySessionScreenState extends ConsumerState<StudySessionScreen> {
                   // exists.
                   _queue = cards.where((c) => c.entryId != card.entryId).toList();
                   _stage = _Stage.front;
+                  _canUndo = false;
                 });
               },
             );
@@ -221,12 +324,21 @@ class _CardView extends StatelessWidget {
   final int index;
   final int total;
   final _Stage stage;
+
+  /// Whether the recall games are on (Premium).
+  final bool premium;
   final VoidCallback onOpenOptions;
   final VoidCallback onKnewIt;
   final VoidCallback onDidntKnowIt;
   final VoidCallback onGameDone;
   final void Function(Grade grade, {bool toRight}) onGrade;
   final VoidCallback onRemove;
+
+  /// "I've mastered this": the word leaves the queue on a long interval.
+  final VoidCallback onMaster;
+
+  /// Takes back the previous card's grade; null when there's none to take.
+  final VoidCallback? onUndo;
   final bool exitToRight;
 
   const _CardView({
@@ -234,12 +346,15 @@ class _CardView extends StatelessWidget {
     required this.index,
     required this.total,
     required this.stage,
+    required this.premium,
+    this.onUndo,
     required this.onOpenOptions,
     required this.onKnewIt,
     required this.onDidntKnowIt,
     required this.onGameDone,
     required this.onGrade,
     required this.onRemove,
+    required this.onMaster,
     required this.exitToRight,
   });
 
@@ -267,6 +382,8 @@ class _CardView extends StatelessWidget {
           direction: card.direction,
           onOpenOptions: onOpenOptions,
           onRemove: onRemove,
+          onMaster: onMaster,
+          onUndo: onUndo,
         ),
         Expanded(
           child: Padding(
@@ -320,7 +437,11 @@ class _CardView extends StatelessWidget {
                                     target: _asked,
                                     onDone: onGameDone,
                                   )
-                                : _FrontHint(key: const ValueKey('hint'), direction: card.direction),
+                                : _FrontHint(
+                                    key: const ValueKey('hint'),
+                                    direction: card.direction,
+                                    games: premium,
+                                  ),
                           ),
                         ],
                       ),
@@ -345,14 +466,17 @@ class _CardView extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 16),
-                          RecallGamePanel(
-                            key: ValueKey('exercise-${card.cardId}'),
-                            card: card,
-                            target: _notAsked,
-                            onDone: () {},
-                            showSkip: false,
-                            dense: true,
-                          ),
+                          if (premium)
+                            RecallGamePanel(
+                              key: ValueKey('exercise-${card.cardId}'),
+                              card: card,
+                              target: _notAsked,
+                              onDone: () {},
+                              showSkip: false,
+                              dense: true,
+                            )
+                          else
+                            const _RecallGamesLocked(),
                         ],
                       ),
                     ),
@@ -364,13 +488,24 @@ class _CardView extends StatelessWidget {
         ),
         if (stage == _Stage.back)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-            child: Row(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Column(
               children: [
-                _GradeButton(label: 'Again', color: Colors.red, onTap: () => onGrade(Grade.again)),
-                _GradeButton(label: 'Hard', color: Colors.orange, onTap: () => onGrade(Grade.hard)),
-                _GradeButton(label: 'Good', color: Colors.green, onTap: () => onGrade(Grade.good)),
-                _GradeButton(label: 'Easy', color: Colors.teal, onTap: () => onGrade(Grade.easy)),
+                Row(
+                  children: [
+                    _GradeButton(label: 'Again', color: Colors.red, onTap: () => onGrade(Grade.again)),
+                    _GradeButton(label: 'Hard', color: Colors.orange, onTap: () => onGrade(Grade.hard)),
+                    _GradeButton(label: 'Good', color: Colors.green, onTap: () => onGrade(Grade.good)),
+                    _GradeButton(label: 'Easy', color: Colors.teal, onTap: () => onGrade(Grade.easy)),
+                  ],
+                ),
+                // Beyond Easy: the word is known cold and needn't keep
+                // coming round. Rare, so quiet — a text button, not a fifth grade.
+                TextButton.icon(
+                  onPressed: onMaster,
+                  icon: const Icon(Icons.verified_outlined, size: 18),
+                  label: const Text('I\'ve mastered this word'),
+                ),
               ],
             ),
           )
@@ -469,7 +604,7 @@ class _CardFaceState extends State<_CardFace> {
   }
 }
 
-/// Counter, direction badge, ⋮ menu, and the progress bar — which is also
+/// Counter, direction badge, undo, ⋮ menu, and the progress bar — which is also
 /// the way into the study options sheet, since a progress bar is exactly
 /// where you look when you want to know how much is left and how it's being
 /// scheduled.
@@ -479,6 +614,8 @@ class _SessionHeader extends StatelessWidget {
   final StudyDirection direction;
   final VoidCallback onOpenOptions;
   final VoidCallback onRemove;
+  final VoidCallback onMaster;
+  final VoidCallback? onUndo;
 
   const _SessionHeader({
     required this.index,
@@ -486,6 +623,8 @@ class _SessionHeader extends StatelessWidget {
     required this.direction,
     required this.onOpenOptions,
     required this.onRemove,
+    required this.onMaster,
+    this.onUndo,
   });
 
   @override
@@ -508,6 +647,13 @@ class _SessionHeader extends StatelessWidget {
                 child: Text(direction.label, style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant)),
               ),
               const Spacer(),
+              // Always drawn, greyed when there's nothing to take back, so
+              // it's in the same place every time a thumb reaches for it.
+              IconButton(
+                icon: const Icon(Icons.undo),
+                tooltip: 'Undo last grade',
+                onPressed: onUndo,
+              ),
               PopupMenuButton<void>(
                 icon: const Icon(Icons.more_vert),
                 tooltip: 'More',
@@ -516,6 +662,16 @@ class _SessionHeader extends StatelessWidget {
                     onTap: onOpenOptions,
                     child: const Row(
                       children: [Icon(Icons.tune, size: 18), SizedBox(width: 8), Text('Study options')],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    onTap: onMaster,
+                    child: const Row(
+                      children: [
+                        Icon(Icons.verified_outlined, size: 18),
+                        SizedBox(width: 8),
+                        Text('Mark as mastered'),
+                      ],
                     ),
                   ),
                   PopupMenuItem(
@@ -747,7 +903,11 @@ class _SenseList extends StatelessWidget {
 class _FrontHint extends StatelessWidget {
   final StudyDirection direction;
 
-  const _FrontHint({super.key, required this.direction});
+  /// Whether swiping up leads to a recall game (Premium) or just turns
+  /// the card.
+  final bool games;
+
+  const _FrontHint({super.key, required this.direction, required this.games});
 
   @override
   Widget build(BuildContext context) {
@@ -762,13 +922,57 @@ class _FrontHint extends StatelessWidget {
           textAlign: TextAlign.center,
           style: TextStyle(color: scheme.onSurfaceVariant),
         ),
-        const SizedBox(height: 6),
-        Text(
-          'Swipe up to jog your memory first',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant.withValues(alpha: 0.7)),
-        ),
+        if (games) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Swipe up to jog your memory first',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant.withValues(alpha: 0.7)),
+          ),
+        ],
       ],
+    );
+  }
+}
+
+/// What a free account sees where the back-of-card exercise would be: a
+/// line about the recall games, and the way to them.
+class _RecallGamesLocked extends StatelessWidget {
+  const _RecallGamesLocked();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(Icons.lock_outline, size: 16, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Recall games are Premium: a quick exercise on each card, a memory jog '
+                  'before the answer, and a round on the words you missed.',
+                  style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () => showPaywall(context, source: 'study_recall_games'),
+              child: const Text('See Premium'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

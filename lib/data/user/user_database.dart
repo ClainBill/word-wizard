@@ -299,6 +299,25 @@ class HuntPuzzles extends Table {
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 }
 
+/// A group puzzle this device has downloaded (or generated and published)
+/// and stored as an ordinary `crossword_puzzles` row, so it's played and
+/// scored by the same screen as any other. Keyed on the server's puzzle
+/// id; the row's local id is where the progress lives, and what the
+/// leaderboard upload reads.
+@DataClassName('GroupPuzzleLinkRow')
+class GroupPuzzleLinks extends Table {
+  TextColumn get remoteId => text()();
+  TextColumn get groupId => text()();
+  TextColumn get puzzleDate => text()();
+  IntColumn get localPuzzleId => integer()();
+  // Last leaderboard upload, as "solved/total/completed" — skip the call
+  // when nothing changed.
+  TextColumn get lastUploaded => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {remoteId};
+}
+
 /// One piece of text brought into the Reader tab — the history the tab
 /// keeps, so something copied last week can be reopened with its words
 /// still tappable and still marked against today's lists.
@@ -412,6 +431,7 @@ class LookupLog extends Table {
   CrosswordBannedAnswers,
   ReaderDocuments,
   HuntPuzzles,
+  GroupPuzzleLinks,
   GameResults,
   SearchLog,
   LookupLog,
@@ -420,7 +440,7 @@ class UserDatabase extends _$UserDatabase {
   UserDatabase(super.e);
 
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 16;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -529,6 +549,9 @@ class UserDatabase extends _$UserDatabase {
           }
           if (from < 15) {
             await m.createTable(huntPuzzles);
+          }
+          if (from < 16) {
+            await m.createTable(groupPuzzleLinks);
           }
         },
       );

@@ -1,3 +1,5 @@
+import 'package:flutter/widgets.dart' show BuildContext;
+import 'package:flutter_riverpod/flutter_riverpod.dart' show ProviderScope;
 import 'package:go_router/go_router.dart';
 
 import '../domain/crossword/crossword_models.dart';
@@ -9,7 +11,12 @@ import '../features/games/crossword_screen.dart';
 import '../features/games/games_screen.dart';
 import '../features/games/hunt_history_screen.dart';
 import '../features/games/hunt_screen.dart';
+import '../features/groups/group_screen.dart';
+import '../features/groups/groups_screen.dart';
+import '../features/leaderboard/leaderboard_screen.dart';
 import '../features/lists/list_detail_screen.dart';
+import '../features/premium/legal_screen.dart';
+import '../features/premium/paywall_screen.dart';
 import '../features/lists/lists_screen.dart';
 import '../features/reader/reader_edit_screen.dart';
 import '../features/reader/reader_history_screen.dart';
@@ -22,7 +29,18 @@ import '../features/progress/progress_screen.dart';
 import '../features/study/manage_study_screen.dart';
 import '../features/study/study_screen.dart';
 import '../features/study/study_session_screen.dart';
+import 'providers.dart' show isPremiumProvider;
 import 'shell.dart';
+
+/// Premium games are reachable only with Premium: a free account that
+/// lands on one — from a notification, a history link, a stale route —
+/// gets the paywall with the game as its destination (spec §3.2).
+String? _premiumGate(BuildContext context, GoRouterState state) {
+  final location = state.uri.toString();
+  if (gameRouteIsFree(location)) return null;
+  if (ProviderScope.containerOf(context, listen: false).read(isPremiumProvider)) return null;
+  return Uri(path: '/premium', queryParameters: {'source': 'route', 'next': location}).toString();
+}
 
 const String _home = String.fromEnvironment('INITIAL_ROUTE', defaultValue: '/search');
 
@@ -41,7 +59,9 @@ final appRouter = GoRouter(
       path: '/entry/:headword',
       builder: (context, state) => EntryDetailScreen(
         headword: Uri.decodeComponent(state.pathParameters['headword']!),
-        fromSearch: state.uri.queryParameters['from'] == 'search',
+        // A search result or a tile on the landing board: both are the
+        // person choosing a word, which is what a lookup is.
+        fromSearch: const {'search', 'board'}.contains(state.uri.queryParameters['from']),
       ),
     ),
     GoRoute(
@@ -61,6 +81,17 @@ final appRouter = GoRouter(
             : FeedbackKind.bug,
       ),
     ),
+    // The paywall: full screen, on the root navigator, over whatever asked
+    // for it. `next` is the game a purchase should open.
+    GoRoute(
+      path: '/premium',
+      builder: (context, state) => PaywallScreen(
+        source: state.uri.queryParameters['source'] ?? 'unknown',
+        next: state.uri.queryParameters['next'],
+      ),
+    ),
+    GoRoute(path: '/legal/terms', builder: (context, state) => const LegalScreen.terms()),
+    GoRoute(path: '/legal/privacy', builder: (context, state) => const LegalScreen.privacy()),
     GoRoute(
       path: '/study/manage',
       builder: (context, state) => const ManageStudyScreen(),
@@ -71,6 +102,7 @@ final appRouter = GoRouter(
     ),
     GoRoute(
       path: '/games/crossword/:difficulty',
+      redirect: _premiumGate,
       builder: (context, state) => CrosswordScreen(
         difficulty: CrosswordDifficulty.fromStorageKey(state.pathParameters['difficulty']!),
         // A specific past generation opened from history; absent means the
@@ -86,9 +118,19 @@ final appRouter = GoRouter(
     ),
     GoRoute(
       path: '/games/hunt',
+      redirect: _premiumGate,
       builder: (context, state) => HuntScreen(
         puzzleId: int.tryParse(state.uri.queryParameters['puzzle'] ?? ''),
       ),
+    ),
+    // Group puzzles. Open to free accounts too — joining an invite is the
+    // free tier's look at the feature; *playing* goes through the
+    // crossword route and its gate.
+    GoRoute(path: '/games/leaderboard', builder: (context, state) => const LeaderboardScreen()),
+    GoRoute(path: '/games/groups', builder: (context, state) => const GroupsScreen()),
+    GoRoute(
+      path: '/games/groups/:id',
+      builder: (context, state) => GroupScreen(groupId: state.pathParameters['id']!),
     ),
     GoRoute(
       path: '/games/hunt/history',

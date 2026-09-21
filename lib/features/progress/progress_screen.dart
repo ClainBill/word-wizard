@@ -60,7 +60,7 @@ class ProgressScreen extends ConsumerWidget {
 String shareText(ProgressSummary s, {required int streak}) {
   final o = s.overview;
   final lines = <String>[
-    'Lexery — my vocabulary',
+    'Word Wizard — my Lexery',
     '${formatCount(o.mastered)} words mastered · ${formatCount(o.studying)} studying'
         '${o.unstudied > 0 ? ' · ${formatCount(o.unstudied)} in lists' : ''}',
   ];
@@ -71,7 +71,7 @@ String shareText(ProgressSummary s, {required int streak}) {
     if (streak > 1) parts.add('$streak-day streak');
     lines.add(parts.join(' · '));
   }
-  if (s.gamesCompleted > 0) {
+  if (s.gamesCompleted > 0 || s.gamesWordsSolved > 0) {
     final bests = [
       for (final g in s.games)
         if (g.best != null) '${_gameLabel(g)} ${formatClock(g.best!)}',
@@ -79,6 +79,9 @@ String shareText(ProgressSummary s, {required int streak}) {
     lines.add(
       '${formatCount(s.gamesCompleted)} puzzle${s.gamesCompleted == 1 ? '' : 's'} solved'
       '${s.gamesClean > 0 ? ' (${formatCount(s.gamesClean)} clean)' : ''}'
+      '${s.gamesUnfinished > 0 ? ' · ${formatCount(s.gamesUnfinished)} in progress' : ''}'
+      ' · ${formatCount(s.gamesWordsSolved)} puzzle words got'
+      '${s.gamesTime.inMinutes > 0 ? ' · ${formatSpan(s.gamesTime)} puzzling' : ''}'
       '${bests.isEmpty ? '' : ' · best ${bests.join(', ')}'}',
     );
   }
@@ -340,8 +343,9 @@ class _GamesTable extends StatelessWidget {
               children: [
                 Expanded(flex: 3, child: Text('Game', style: muted)),
                 Expanded(flex: 2, child: Text('Solved', style: muted, textAlign: TextAlign.right)),
+                Expanded(flex: 2, child: Text('Words', style: muted, textAlign: TextAlign.right)),
+                Expanded(flex: 2, child: Text('Time', style: muted, textAlign: TextAlign.right)),
                 Expanded(flex: 2, child: Text('Best', style: muted, textAlign: TextAlign.right)),
-                Expanded(flex: 2, child: Text('Typical', style: muted, textAlign: TextAlign.right)),
               ],
             ),
           ),
@@ -370,26 +374,49 @@ class _GamesTable extends StatelessWidget {
                   ),
                   Expanded(
                     flex: 2,
+                    child: Text(formatCount(g.wordsSolved), textAlign: TextAlign.right),
+                  ),
+                  Expanded(
+                    flex: 2,
                     child: Text(
-                      g.best == null ? '—' : formatClock(g.best!),
+                      g.totalTime.inMinutes == 0 ? '—' : formatSpan(g.totalTime),
                       textAlign: TextAlign.right,
                     ),
                   ),
                   Expanded(
                     flex: 2,
                     child: Text(
-                      g.median == null ? '—' : formatClock(g.median!),
+                      g.best == null ? '—' : formatClock(g.best!),
                       textAlign: TextAlign.right,
                     ),
                   ),
                 ],
               ),
             ),
+          // What's still on the go: a puzzle you spent twenty minutes on
+          // and didn't finish is progress too.
+          for (final g in ordered)
+            if (g.unfinished > 0 && g.unfinishedProgress != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '${_gameLabel(g)}: ${g.unfinished} in progress, '
+                    '${(g.unfinishedProgress! * 100).round()}% done on average',
+                    style: muted,
+                  ),
+                ),
+              ),
           Padding(
             padding: const EdgeInsets.only(top: 4, bottom: 6),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Text('Times are clean solves only — no letters revealed.', style: muted),
+              child: Text(
+                'Words: answers got right in any puzzle, finished or not. '
+                'Best: clean solves only — no letters revealed.',
+                style: muted,
+              ),
             ),
           ),
         ],
@@ -479,7 +506,8 @@ class _ActivityHeatmap extends StatelessWidget {
                                 ? ''
                                 : '${_monthNames[day.day.month - 1]} ${day.day.day}: '
                                     '${day.reviews} reviews, ${day.lookups} lookups, '
-                                    '${day.games} puzzles',
+                                    '${day.games} puzzles'
+                                    '${day.gameTime.inMinutes > 0 ? ' (${formatSpan(day.gameTime)})' : ''}',
                             child: Container(
                               width: size,
                               height: size,

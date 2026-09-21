@@ -47,6 +47,14 @@ dependencies:
 
   # Accounts, premium and the AI proxy — see supabase/README.md
   supabase_flutter: ^2.17.2
+  # Purchases (RevenueCat) — the paywall; see lib/services/purchases_service.dart.
+  purchases_flutter: ^10.13.1
+  url_launcher: ^6.3.2
+  # Ads for the free tier (AdMob); see lib/services/ads_service.dart.
+  google_mobile_ads: ^9.1.0
+  google_sign_in: ^7.2.0
+  sign_in_with_apple: ^8.1.0
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:
@@ -55,20 +63,33 @@ dev_dependencies:
   drift_dev: ^2.23.1
   build_runner: ^2.4.15
   flutter_launcher_icons: ^0.14.3
+  fake_async: ^1.3.3
 
 flutter:
   uses-material-design: true
 
   assets:
-    - assets/db/
+    # The dictionary (assets/db/dictionary.db) is deliberately not a Flutter
+    # asset: Android ships it as an asset pack (android/dictionary_pack) and
+    # iOS as a bundle resource (Runner target) — see DictionaryInstaller.
     - assets/crossword/
     - assets/hunt/
+    # The hat-and-W mark on its own, for the sign-in sheet.
+    - assets/icon/mark.png
+    # Terms and privacy, shown in-app from the paywall and Settings.
+    - docs/TERMS.md
+    - docs/PRIVACY_POLICY.md
 
+# Sources in assets/icon/ are composed from the pack in
+# assets/word-wizard-icon-pack/ (tool/make_icons.py): the pack's rounded
+# square has its corners baked in, and each platform wants a full square
+# (iOS masks it) or a separate foreground layer (Android adaptive).
+# Regenerate with: dart run flutter_launcher_icons
 flutter_launcher_icons:
   android: true
   ios: true
   # App Store rejects icons with an alpha channel; flatten it for iOS only.
   remove_alpha_ios: true
   image_path: "assets/icon/icon.png"
-  adaptive_icon_background: "#8A5A22"
+  adaptive_icon_background: "#1E271A"
   adaptive_icon_foreground: "assets/icon/icon_foreground.png"

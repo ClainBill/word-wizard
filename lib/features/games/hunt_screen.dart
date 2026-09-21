@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
+import '../../domain/games/active_clock.dart';
 import '../../data/repositories/hunt_repository.dart';
 import '../../domain/hunt/hunt_models.dart';
 import '../../domain/hunt/hunt_solver.dart' show huntNeighbours;
@@ -95,7 +96,7 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
   }
 
   int _bankedMs = 0;
-  final Stopwatch _clock = Stopwatch();
+  final ActiveClock _clock = ActiveClock();
   int get _activeMs => _bankedMs + _clock.elapsedMilliseconds;
 
   /// Read once: `ref` can't be used from `dispose`, and that is exactly
@@ -128,6 +129,7 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
   @override
   void dispose() {
     _clock.stop();
+    _clock.dispose();
     _flushPlayTime();
     _feedbackTimer?.cancel();
     _spin.dispose();
@@ -628,7 +630,11 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
           ),
         ],
       ),
-      body: sessionAsync.when(
+      // Any touch counts as activity for the play clock.
+      body: Listener(
+        onPointerDown: (_) => _clock.touch(),
+        behavior: HitTestBehavior.translucent,
+        child: sessionAsync.when(
         loading: () => const _Loading(),
         error: (e, _) => Center(child: Text('Couldn\'t build a board: $e')),
         data: (session) {
@@ -642,6 +648,7 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
           }
           return _body(context, session.puzzle);
         },
+      ),
       ),
     );
   }

@@ -5,9 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
+import '../../domain/board/word_board.dart' show isBoardable;
 import '../../domain/models/entry.dart';
 import '../../widgets/entry_card.dart';
 import '../../widgets/pos_tag.dart';
+import 'word_board_view.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key});
@@ -16,8 +18,9 @@ class SearchScreen extends ConsumerStatefulWidget {
   ConsumerState<SearchScreen> createState() => _SearchScreenState();
 }
 
-class _SearchScreenState extends ConsumerState<SearchScreen> {
+class _SearchScreenState extends ConsumerState<SearchScreen> with WidgetsBindingObserver {
   final _controller = TextEditingController();
+  final _focus = FocusNode();
   Timer? _debounce;
 
   /// Search is live, so a query only exists as a thing worth remembering
@@ -30,13 +33,45 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   List<EntrySummary> _results = const [];
   bool _loading = false;
 
+  /// Which search is the current one. Searches overlap when typing is
+  /// quick — "can" can come back after "candor" — and only the latest
+  /// may set the results.
+  int _searchSeq = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(() => setState(() {}));
+    WidgetsBinding.instance.addObserver(this);
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
     _settle?.cancel();
     _controller.dispose();
+    _focus.dispose();
     super.dispose();
   }
+
+  bool _keyboardUp = false;
+
+  /// Android's back closes the keyboard but leaves the field focused, which
+  /// would leave the recents up with no way back to the board. Closing the
+  /// keyboard on an empty field means "never mind" — so drop the focus too.
+  @override
+  void didChangeMetrics() {
+    final up = View.of(context).viewInsets.bottom > 0;
+    if (_keyboardUp && !up && _focus.hasFocus && _controller.text.trim().isEmpty) {
+      _focus.unfocus();
+    }
+    _keyboardUp = up;
+  }
+
+  /// The board is what the tab lands on: it stays until the field is
+  /// tapped, and comes back when the field is left empty.
+  bool get _showBoard => !_focus.hasFocus && _controller.text.trim().isEmpty;
 
   void _onChanged(String query) {
     _debounce?.cancel();
@@ -45,13 +80,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   Future<void> _runSearch(String query) async {
+    final seq = ++_searchSeq;
     if (query.trim().isEmpty) {
-      setState(() => _results = const []);
+      setState(() {
+        _results = const [];
+        _loading = false;
+      });
       return;
     }
     setState(() => _loading = true);
     final results = await ref.read(searchRepositoryProvider).searchOrResolve(query);
-    if (!mounted) return;
+    if (!mounted || seq != _searchSeq) return;
     setState(() {
       _results = results;
       _loading = false;
@@ -78,6 +117,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     context.push('/entry/${Uri.encodeComponent(entry.headword)}?from=search');
   }
 
+  /// A tile on the board. Counts as a lookup (they chose the word), but
+  /// isn't a search, so it doesn't go in the search history.
+  void _openFromBoard(String headword) {
+    context.push('/entry/${Uri.encodeComponent(headword)}?from=board');
+  }
+
   void _rerun(String query) {
     _controller.text = query;
     _controller.selection = TextSelection.collapsed(offset: query.length);
@@ -89,7 +134,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Lexery'),
+        title: const Text('Word Wizard'),
         centerTitle: false,
       ),
       body: Column(
@@ -98,6 +143,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
             child: TextField(
               controller: _controller,
+              focusNode: _focus,
               autofocus: false,
               textInputAction: TextInputAction.search,
               decoration: InputDecoration(
@@ -126,7 +172,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           ),
           if (_loading) const LinearProgressIndicator(minHeight: 2),
           Expanded(
-            child: _results.isEmpty
+            child: _showBoard
+                ? _LandingBoard(onOpen: _openFromBoard)
+                : _results.isEmpty
                 ? _controller.text.trim().isNotEmpty
                     ? const _EmptyState(hasQuery: true)
                     : _RecentSearches(onPick: _rerun)
@@ -141,6 +189,46 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The word board with its data: the word of the day in the middle, a
+/// fresh draw of words around it, and the Lexery deciding the colours.
+class _LandingBoard extends ConsumerWidget {
+  final ValueChanged<String> onOpen;
+
+  const _LandingBoard({required this.onOpen});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final wotdAsync = ref.watch(wordOfTheDayProvider(today));
+    final wotd = wotdAsync.valueOrNull;
+    final words = ref.watch(boardWordsProvider);
+    final familiarity = ref.watch(familiarityProvider).valueOrNull ?? const {};
+
+    // Wait for the seed as well as the pool: a board that restarts when the
+    // word of the day arrives a moment later would flash.
+    if (wotdAsync.isLoading) return const Center(child: CircularProgressIndicator());
+    return words.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => const _EmptyState(hasQuery: false),
+      data: (pool) {
+        final daily = wotd?.headword.toLowerCase();
+        final seed = daily != null && isBoardable(daily)
+            ? daily
+            : pool.firstWhere(isBoardable, orElse: () => 'wizard');
+        return WordBoardView(
+          seed: seed,
+          seedCaption: seed == daily ? 'Word of the day' : null,
+          words: pool,
+          familiarity: familiarity,
+          onOpen: onOpen,
+          onShuffle: () => ref.invalidate(boardWordsProvider),
+        );
+      },
     );
   }
 }
@@ -253,8 +341,8 @@ class _WordOfTheDayCard extends ConsumerWidget {
   }
 }
 
-/// What was searched before, shown while the field is empty, under the
-/// word of the day. Tapping one re-runs it; the swipe and the clear action
+/// What was searched before, shown while the field is focused and empty,
+/// under the word of the day. Tapping one re-runs it; the swipe and the clear action
 /// are there because a search history nobody can edit is a small
 /// embarrassment waiting to happen.
 class _RecentSearches extends ConsumerWidget {

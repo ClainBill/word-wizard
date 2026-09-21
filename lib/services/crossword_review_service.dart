@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../app/environment.dart';
 import '../domain/crossword/crossword_models.dart';
 import '../domain/crossword/editorial.dart';
 
@@ -115,13 +116,13 @@ class CrosswordReviewService {
   /// not say which one was sent.
   (String, String)? get _keySource {
     // A key the user pasted into Settings is theirs to spend, in any build
-    // — see ApiKeyStore. The build-time define stays debug-only: even if a
-    // release build is handed it, it does not call OpenAI directly. A
-    // shipping build without a user key goes through [proxyUrl] or not at
-    // all.
+    // — see ApiKeyStore. The build-time define is for dev-tools builds
+    // only (AppEnvironment.devTools): a store build handed it does not
+    // call OpenAI directly. A shipping build without a user key goes
+    // through [proxyUrl] or not at all.
     final userKey = ApiKeyStore.instance.key;
     if (userKey != null) return (userKey, 'Settings key ${ApiKeyStore.mask(userKey)}');
-    if (kReleaseMode) return null;
+    if (!AppEnvironment.devTools) return null;
     final key = _definedKey.trim();
     return key.isEmpty ? null : (key, '.env key ${ApiKeyStore.mask(key)}');
   }

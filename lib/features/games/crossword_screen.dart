@@ -7,8 +7,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
+import '../../domain/games/active_clock.dart';
 import '../../data/repositories/crossword_repository.dart';
 import '../../domain/crossword/crossword_models.dart';
+import '../../domain/premium/premium.dart' show sampleWithoutEditorNote;
+import '../premium/paywall_screen.dart' show showPaywall;
 import '../progress/progress_format.dart';
 
 String _cellKey(int row, int col) => '$row,$col';
@@ -97,7 +100,7 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
   /// is in front, so a puzzle left open overnight doesn't clock the night.
   /// Together they are what gets written to the play record.
   int _bankedMs = 0;
-  final Stopwatch _clock = Stopwatch();
+  final ActiveClock _clock = ActiveClock();
 
   int get _activeMs => _bankedMs + _clock.elapsedMilliseconds;
 
@@ -213,6 +216,7 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
   @override
   void dispose() {
     _clock.stop();
+    _clock.dispose();
     _flushPlayTime();
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
@@ -287,6 +291,13 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
     if (_reviewRequested || puzzleId == null || !_isCurrent || _completed) return;
     if (_filled.isNotEmpty) return;
     _reviewRequested = true;
+
+    // The free sample is played without the editorial pass — that's part
+    // of what Premium buys, and the strip says so.
+    if (!ref.read(isPremiumProvider)) {
+      setState(() => _reviewStatus = 'sample');
+      return;
+    }
 
     if (puzzle.reviewed) {
       setState(() => _reviewStatus = 'already_reviewed');
@@ -452,6 +463,7 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
   }
 
   void _onTextChanged(String value) {
+    _clock.touch();
     if (value == ' ') return; // our own programmatic reset — ignore
     final cell = _selectedCell;
     if (cell == null) {
@@ -664,7 +676,11 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
           ),
         ],
       ),
-      body: sessionAsync.when(
+      // Any touch or keystroke counts as activity for the play clock.
+      body: Listener(
+        onPointerDown: (_) => _clock.touch(),
+        behavior: HitTestBehavior.translucent,
+        child: sessionAsync.when(
         loading: () => Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -726,6 +742,7 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
           _prepare(session.puzzle, session);
           return _PuzzleBody(state: this, puzzle: session.puzzle);
         },
+      ),
       ),
     );
   }
@@ -1124,6 +1141,10 @@ class _ReviewStrip extends ConsumerWidget {
     String text;
     IconData icon = Icons.auto_fix_high_outlined;
 
+    if (status == 'sample') {
+      // Tapping this strip opens the paywall, not the history.
+      return _SampleStrip(text: sampleWithoutEditorNote);
+    }
     if (running) {
       text = 'AI editor reviewing this puzzle…';
     } else if (latest != null) {
@@ -1180,6 +1201,39 @@ class _ReviewStrip extends ConsumerWidget {
                 ),
               ),
               Icon(Icons.chevron_right, size: 15, color: scheme.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The free sample's version of the strip: what the AI editor would have
+/// done, and the way to it.
+class _SampleStrip extends StatelessWidget {
+  final String text;
+
+  const _SampleStrip({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+      child: InkWell(
+        onTap: () => showPaywall(context, source: 'crossword_sample'),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          child: Row(
+            children: [
+              Icon(Icons.auto_fix_off_outlined, size: 15, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(text, style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+              ),
+              const SizedBox(width: 8),
+              Text('Premium', style: TextStyle(fontSize: 12, color: scheme.primary)),
             ],
           ),
         ),

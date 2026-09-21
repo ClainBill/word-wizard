@@ -19,7 +19,7 @@ class LicencesScreen extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
         children: [
           Text(
-            'Lexery is built on open data. This is what it uses and what each '
+            'Word Wizard is built on open data. This is what it uses and what each '
             'source asks in return.',
             style: TextStyle(color: scheme.onSurfaceVariant),
           ),
@@ -35,7 +35,7 @@ class LicencesScreen extends StatelessWidget {
           OutlinedButton.icon(
             onPressed: () => showLicensePage(
               context: context,
-              applicationName: 'Lexery',
+              applicationName: 'Word Wizard',
               applicationVersion: appVersion,
               applicationLegalese: 'Dictionary content © Wiktionary contributors, CC BY-SA 3.0.',
             ),

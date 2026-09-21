@@ -55,7 +55,7 @@ otp_expiry = 3600
 # delivers to the org's own members. Gmail SMTP with an app password is
 # enough for dev (README, "Email"); then uncomment and `config push`.
 # [auth.email.template.magic_link]
-# subject = "Your Lexery sign-in code"
+# subject = "Your Word Wizard sign-in code"
 # content_path = "./supabase/templates/magic_link.html"
 
 # Providers are configured in the dashboard for hosted projects (client ids
@@ -85,6 +85,12 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.entitlement-refresh]
+verify_jwt = true
+
+[functions.founder-status]
+verify_jwt = true
+
+[functions.founder-reserve]
 verify_jwt = true
 
 # Anonymous callers carry the anon key, which passes the gateway's JWT

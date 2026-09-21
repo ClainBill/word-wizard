@@ -25,6 +25,18 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
+    // The dictionary ships as an install-time asset pack (see
+    // dictionary_pack/build.gradle.kts) rather than a Flutter asset. Gradle
+    // only packs asset packs into *bundles*; an APK built with `assemble`
+    // (flutter run, flutter build apk) would come out without it — so for
+    // those the same file is folded into the base APK's assets instead.
+    // Either way the app finds it at AssetManager "dictionary.db".
+    assetPacks += listOf(":dictionary_pack")
+    val buildingBundle = gradle.startParameter.taskNames.any { it.contains("bundle", ignoreCase = true) }
+    if (!buildingBundle) {
+        sourceSets.getByName("main").assets.srcDirs("../dictionary_pack/src/main/assets")
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

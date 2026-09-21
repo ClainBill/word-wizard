@@ -50,6 +50,15 @@ class GameDifficultyStats {
   final Duration? median;
   final Duration totalTime;
 
+  /// Words got right across every puzzle, finished or not — crossword
+  /// answers fully and correctly filled, Word Hunt words found. The
+  /// progress that a puzzle left unfinished still made.
+  final int wordsSolved;
+
+  /// Of the unfinished puzzles, how far along they are on average (0..1).
+  /// Null when nothing is unfinished.
+  final double? unfinishedProgress;
+
   const GameDifficultyStats({
     required this.game,
     required this.difficulty,
@@ -59,6 +68,8 @@ class GameDifficultyStats {
     required this.best,
     required this.median,
     required this.totalTime,
+    this.wordsSolved = 0,
+    this.unfinishedProgress,
   });
 }
 
@@ -85,13 +96,19 @@ class ActivityDay {
   final DateTime day;
   final int reviews;
   final int lookups;
+
+  /// Puzzles *played* that day — opened and worked on, finished or not.
   final int games;
+
+  /// Time spent in puzzle screens that day.
+  final Duration gameTime;
 
   const ActivityDay({
     required this.day,
     required this.reviews,
     required this.lookups,
     required this.games,
+    this.gameTime = Duration.zero,
   });
 
   int get total => reviews + lookups + games;
@@ -147,4 +164,7 @@ class ProgressSummary {
 
   int get gamesCompleted => games.fold(0, (n, g) => n + g.completed);
   int get gamesClean => games.fold(0, (n, g) => n + g.clean);
+  int get gamesUnfinished => games.fold(0, (n, g) => n + g.unfinished);
+  int get gamesWordsSolved => games.fold(0, (n, g) => n + g.wordsSolved);
+  Duration get gamesTime => games.fold(Duration.zero, (t, g) => t + g.totalTime);
 }

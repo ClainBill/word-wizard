@@ -8,6 +8,7 @@ import 'package:word_wizard/data/user/user_database.dart';
 import 'package:word_wizard/domain/models/study_card.dart';
 import 'package:word_wizard/domain/models/study_direction.dart';
 import 'package:word_wizard/domain/models/word_list.dart';
+import 'package:word_wizard/domain/srs/sm2.dart';
 
 const _w2m = {StudyDirection.wordToMeaning};
 
@@ -343,5 +344,60 @@ void main() {
       final card = (await studyRepo.dueQueue(directions: _w2m)).single;
       expect(card.senses.map((s) => s.senseId).toList(), [11]);
     });
+  });
+  test('masterEntry sends every direction of a word to mastered and logs why', () async {
+    await seedEntry(7, 'candor');
+    await studyRepo.ensureCard(7, StudyDirection.values.toSet());
+    final before = await studyRepo.watchStats(StudyDirection.values.toSet()).first;
+    expect(before.mastered, 0);
+    expect(before.dueToday, greaterThan(0));
+
+    await studyRepo.masterEntry(7);
+
+    final after = await studyRepo.watchStats(StudyDirection.values.toSet()).first;
+    final rows = await db.select(db.studyCards).get();
+    expect(rows.length, 2, reason: 'one card per direction');
+    expect(after.mastered, rows.length, reason: 'both directions count as mastered');
+    expect(after.dueToday, 0);
+    for (final row in rows) {
+      expect(row.intervalDays, StudyRepository.masteredIntervalDays);
+      expect(row.easeFactor, greaterThanOrEqualTo(2.5));
+      expect(row.dueAt.isAfter(DateTime.now().add(const Duration(days: 100))), isTrue);
+    }
+    final log = await db.select(db.reviewLog).get();
+    expect(log.length, rows.length);
+    expect(log.every((r) => r.grade == 5), isTrue);
+  });
+
+  test('ungrade puts the card back exactly as it was and drops the logged review', () async {
+    await seedEntry(8, 'lucid');
+    await studyRepo.ensureCard(8, _w2m);
+    final card = (await studyRepo.dueQueue(directions: _w2m)).single;
+    // Grade twice so there's an older review to leave alone.
+    final second = await studyRepo.grade(card, Grade.good, spent: const Duration(seconds: 3));
+    final graded = (await (db.select(db.studyCards)).get()).single;
+    final cardAfterFirst = StudyCard(
+      cardId: card.cardId,
+      entryId: card.entryId,
+      headword: card.headword,
+      pos: card.pos,
+      senses: card.senses,
+      direction: card.direction,
+      srs: second.state,
+      dueAt: second.dueAt,
+    );
+    await studyRepo.grade(cardAfterFirst, Grade.easy, spent: const Duration(seconds: 2));
+    expect((await db.select(db.reviewLog).get()).length, 2);
+
+    await studyRepo.ungrade(cardAfterFirst);
+
+    final row = (await (db.select(db.studyCards)).get()).single;
+    expect(row.repetitions, graded.repetitions);
+    expect(row.easeFactor, graded.easeFactor);
+    expect(row.intervalDays, graded.intervalDays);
+    expect(row.dueAt, graded.dueAt);
+    final log = await db.select(db.reviewLog).get();
+    expect(log.length, 1, reason: 'only the undone review goes');
+    expect(log.single.grade, Grade.good.q);
   });
 }

@@ -11,11 +11,13 @@ class AppDatabases {
 
   AppDatabases._(this.dictionary, this.user);
 
-  static Future<AppDatabases> open() async {
-    final dictionary = await DictionaryDatabase.openBundled();
+  /// [onDictionaryProgress] reports a first-run copy of the dictionary
+  /// (Android) so the launch screen can show how far along it is.
+  static Future<AppDatabases> open({void Function(double)? onDictionaryProgress}) async {
+    final dictionary = await DictionaryDatabase.openBundled(onProgress: onDictionaryProgress);
     final user = await UserDatabase.open();
 
-    final dictPath = await DictionaryDatabase.resolveFilePath();
+    final dictPath = DictionaryDatabase.openedPath;
     // Escape single quotes defensively; the path itself is app-controlled.
     final escaped = dictPath.replaceAll("'", "''");
     await user.customStatement("ATTACH DATABASE '$escaped' AS dict");

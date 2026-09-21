@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:drift/drift.dart';
 
+import '../../domain/board/word_board.dart' show Familiarity;
 import '../../domain/models/entry.dart';
 import '../../domain/models/reminder_word.dart';
 import '../../domain/models/study_card.dart';
@@ -690,6 +691,57 @@ class StudyRepository {
     return update;
   }
 
+  /// Takes back the last [grade] of [card]: the card's SM-2 state and due
+  /// date go back to what [card] still carries from before the grade, and
+  /// the review just logged is deleted. Only the most recent review of the
+  /// card is removed — the session calls this right after grading, before
+  /// anything else could have touched the card.
+  Future<void> ungrade(StudyCard card) async {
+    await _db.transaction(() async {
+      await (_db.update(_db.studyCards)..where((t) => t.id.equals(card.cardId))).write(
+        StudyCardsCompanion(
+          repetitions: Value(card.srs.repetitions),
+          easeFactor: Value(card.srs.easeFactor),
+          intervalDays: Value(card.srs.intervalDays),
+          dueAt: Value(card.dueAt),
+        ),
+      );
+      final last = await (_db.select(_db.reviewLog)
+            ..where((t) => t.cardId.equals(card.cardId))
+            ..orderBy([(t) => OrderingTerm.desc(t.id)])
+            ..limit(1))
+          .getSingleOrNull();
+      if (last != null) {
+        await (_db.delete(_db.reviewLog)..where((t) => t.id.equals(last.id))).go();
+      }
+    });
+  }
+
+  /// Every word in the Lexery by headword, with how far along it is:
+  /// mastered if any of its cards clears [masteredClause], studying
+  /// otherwise. What the landing board tints its tiles by.
+  Stream<Map<String, Familiarity>> watchFamiliarity() {
+    return _db
+        .customSelect(
+          '''
+          SELECT e.headword, MAX(CASE WHEN $masteredClause THEN 1 ELSE 0 END) AS mastered
+          FROM study_cards sc
+          JOIN dict.entries e ON e.id = sc.entry_id
+          GROUP BY e.headword
+          ''',
+          readsFrom: {_db.studyCards},
+        )
+        .watch()
+        .map(
+          (rows) => {
+            for (final r in rows)
+              r.read<String>('headword'): r.read<int>('mastered') == 1
+                  ? Familiarity.mastered
+                  : Familiarity.studying,
+          },
+        );
+  }
+
   // ---------------------------------------------------------------------
   // SRS management: browsing every word in the pool, its history, and
   // resetting/pausing/removing it (individually or for a whole list).
@@ -772,6 +824,45 @@ class StudyRepository {
         ),
         where: (t) => t.id.equals(cardId),
       );
+    });
+  }
+
+  /// The interval a card jumps to when the person says they've mastered
+  /// the word: past the mastered threshold, and far enough that the check
+  /// review is a real one.
+  static const masteredIntervalDays = 120;
+
+  /// "I know this one cold": every direction of the word goes straight to
+  /// mastered — interval [masteredIntervalDays], ease at least 2.6 — and
+  /// comes back for a single check review then. Logged as an Easy review
+  /// on each card so the history says why the interval jumped. Not a
+  /// removal: a failed check review brings it back like any other card.
+  Future<void> masterEntry(int entryId) async {
+    final cards = await (_db.select(_db.studyCards)..where((t) => t.entryId.equals(entryId)))
+        .get();
+    final dueAt = DateTime.now().add(const Duration(days: masteredIntervalDays));
+    await _db.batch((b) {
+      for (final card in cards) {
+        b.update(
+          _db.studyCards,
+          StudyCardsCompanion(
+            repetitions: Value(card.repetitions < 5 ? 5 : card.repetitions),
+            easeFactor: Value(card.easeFactor < 2.6 ? 2.6 : card.easeFactor),
+            intervalDays: const Value(masteredIntervalDays),
+            dueAt: Value(dueAt),
+            paused: const Value(false),
+          ),
+          where: (t) => t.id.equals(card.id),
+        );
+        b.insert(
+          _db.reviewLog,
+          ReviewLogCompanion.insert(
+            cardId: card.id,
+            grade: Grade.easy.q,
+            priorInterval: card.intervalDays,
+          ),
+        );
+      }
     });
   }
 

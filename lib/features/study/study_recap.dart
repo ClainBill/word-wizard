@@ -32,6 +32,10 @@ class StudyRecap extends ConsumerWidget {
   /// Only offered when there's something left to resume.
   final VoidCallback? onResume;
 
+  /// Takes back the last grade and returns to that card. Offered when the
+  /// session can still put the card back on screen.
+  final VoidCallback? onUndo;
+
   const StudyRecap({
     super.key,
     required this.reviews,
@@ -39,6 +43,7 @@ class StudyRecap extends ConsumerWidget {
     required this.elapsed,
     required this.onDone,
     this.onResume,
+    this.onUndo,
   });
 
   @override
@@ -145,6 +150,18 @@ class StudyRecap extends ConsumerWidget {
             ],
           ),
         ),
+        if (onUndo != null)
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: TextButton.icon(
+                onPressed: onUndo,
+                icon: const Icon(Icons.undo, size: 18),
+                label: const Text('Undo last grade'),
+              ),
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
           child: Row(

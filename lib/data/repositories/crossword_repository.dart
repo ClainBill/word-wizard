@@ -653,6 +653,111 @@ class CrosswordRepository {
   static const double _debugBudgetScale = 5.0;
 
   // -------------------------------------------------------------------
+  // Group puzzles (docs/Group Puzzles v1.1.md)
+  // -------------------------------------------------------------------
+
+  /// Builds a puzzle anchored on a group's shared words instead of this
+  /// person's study pool. Same generator, same lexicon, same quality
+  /// gates; only the anchors differ. [pool] is headwords (any case) with
+  /// optional glosses; clues come from the local dictionary where the
+  /// word is known, else the gloss, else the generator's stub.
+  ///
+  /// [seed] must be the same on every member's device (the service
+  /// derives it from the group and the date) so two people generating at
+  /// once produce grids as alike as the time budget allows — and whichever
+  /// is published first is the one everyone plays regardless.
+  Future<CrosswordPuzzle?> generateFromPool(
+    CrosswordDifficulty difficulty,
+    List<({String headword, String? gloss})> pool, {
+    required String date,
+    required int seed,
+  }) async {
+    final seen = <String>{};
+    final candidates = <({String text, String display, String? gloss})>[];
+    // Deterministic order for a deterministic puzzle: the pool as the
+    // server returns it can differ between members.
+    final sorted = [...pool]..sort((a, b) => a.headword.compareTo(b.headword));
+    for (final word in sorted) {
+      if (candidates.length >= 12) break;
+      if (!_anchorable.hasMatch(word.headword)) continue;
+      final text = word.headword.replaceAll("'", '').toUpperCase();
+      if (text.length < 3 || text.length > difficulty.size) continue;
+      if (!seen.add(text)) continue;
+      candidates.add((text: text, display: word.headword, gloss: word.gloss));
+    }
+    // Same shuffle on every device: the seed decides which dozen lead.
+    candidates.shuffle(Random(seed));
+
+    // Clue from the app's dictionary when it knows the word (it usually
+    // does — the pool came from members' study cards in the same
+    // dictionary), otherwise the gloss the member shared.
+    final entryIds = <int, String>{};
+    final entryOf = <String, int>{};
+    for (final c in candidates) {
+      final entry = await _searchRepository.loadWord(c.display);
+      if (entry != null) {
+        entryIds[entry.canonicalEntryId] = c.text;
+        entryOf[c.text] = entry.canonicalEntryId;
+      }
+    }
+    final clueOptions = await _searchRepository.crosswordClueOptions(entryIds);
+    final srsWords = <CrosswordSrsWord>[
+      for (final c in candidates)
+        (
+          text: c.text,
+          display: c.display,
+          entryId: entryOf[c.text] ?? -1,
+          clue: (clueOptions[entryOf[c.text]] ?? const <String>[])
+                  .where((option) => !isGiveaway(option, c.text))
+                  .firstOrNull ??
+              (c.gloss != null && c.gloss!.isNotEmpty && !isGiveaway(c.gloss!, c.text)
+                  ? c.gloss
+                  : null),
+        ),
+    ];
+    final request = CrosswordIsolateRequest(
+      wordListSource: await _loadWordList(),
+      difficulty: difficulty,
+      srsWords: srsWords,
+      // The group's grid is the same for everyone, so nobody's personal
+      // cooldown applies; the standing ban list still does.
+      blockedAnswers: await _bannedAnswerSet(),
+      weekday: DateTime.parse(date).weekday,
+      seed: seed,
+      budgetScale: kDebugMode ? _debugBudgetScale : 1.0,
+    );
+    final clock = Stopwatch()..start();
+    final puzzle = await _runGenerateInIsolate(request);
+    debugPrint(
+      'group crossword ${difficulty.storageKey}: '
+      '${puzzle == null ? 'no puzzle' : '${puzzle.words.length} words'} '
+      'in ${clock.elapsedMilliseconds} ms (seed $seed, ${srsWords.length} pool words)',
+    );
+    return puzzle;
+  }
+
+  /// Stores a grid that came from elsewhere — the group's published
+  /// puzzle — as a puzzle of this device's own, playable and scored like
+  /// any other. Returns its local id.
+  Future<int> importPuzzle(CrosswordDifficulty difficulty, String date, CrosswordPuzzle puzzle) =>
+      _insert(difficulty, date, puzzle);
+
+  /// How far one puzzle has been played, for the group leaderboard. Null
+  /// if the row is gone.
+  Future<CrosswordPlayState?> playState(int puzzleId) async {
+    final row = await (_db.select(_db.crosswordPuzzles)..where((t) => t.id.equals(puzzleId)))
+        .getSingleOrNull();
+    if (row == null) return null;
+    final event = await (_db.select(_db.crosswordSolveEvents)
+          ..where((t) => t.puzzleId.equals(puzzleId)))
+        .getSingleOrNull();
+    final play = await (_db.select(_db.gameResults)
+          ..where((t) => t.game.equals(_game) & t.refId.equals(puzzleId)))
+        .getSingleOrNull();
+    return _playState(row, event, play);
+  }
+
+  // -------------------------------------------------------------------
   // The editorial pass (PORTING_SPEC.md §9.3-§9.4)
   // -------------------------------------------------------------------
 

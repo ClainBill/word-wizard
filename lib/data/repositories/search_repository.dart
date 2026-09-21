@@ -14,6 +14,9 @@ class SearchRepository {
   /// The featured word for [day] — see `DictionaryDatabase.wordOfTheDay`.
   Future<DailyWord?> wordOfTheDay(DateTime day) => _db.wordOfTheDay(day);
 
+  /// Random words for the landing board — see `DictionaryDatabase.boardWords`.
+  Future<List<String>> boardWords({int count = 90}) => _db.boardWords(count: count);
+
   /// Resolves a single word tapped inside a gloss, example, or etymology
   /// line to its full entry — tries the exact headword first, then falls
   /// back to resolving an inflected surface form (tapping "ran" finds

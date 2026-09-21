@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -9,20 +11,33 @@ import '../data/repositories/list_repository.dart';
 import '../data/repositories/notes_repository.dart';
 import '../data/repositories/progress_repository.dart';
 import '../data/repositories/reader_repository.dart';
+import '../data/repositories/score_repository.dart';
 import '../data/repositories/search_repository.dart';
 import '../data/repositories/settings_repository.dart';
 import '../data/repositories/study_repository.dart';
+import '../domain/board/word_board.dart';
 import '../domain/crossword/crossword_models.dart';
 import '../domain/models/daily_word.dart';
 import '../domain/models/progress.dart';
 import '../domain/models/reader_document.dart';
 import '../domain/models/study_dashboard.dart';
+import '../domain/games/scoring.dart';
+import '../domain/groups/group_models.dart';
 import '../domain/models/study_direction.dart';
+import '../domain/premium/premium.dart';
 import '../domain/reader/reader_analysis.dart';
+import '../services/ads_service.dart';
 import '../services/api_key_store.dart';
 import '../services/auth_service.dart';
 import '../services/clipboard_service.dart';
 import '../services/feedback_service.dart';
+import '../services/founder_service.dart';
+import '../services/group_puzzle_service.dart';
+import '../services/groups_api.dart';
+import '../services/leaderboard_api.dart';
+import '../services/score_sync.dart';
+import '../services/premium_prompts.dart';
+import '../services/purchases_service.dart';
 import '../services/notification_service.dart';
 import '../services/screen_capture.dart';
 
@@ -66,6 +81,27 @@ final wordOfTheDayEnabledProvider = StreamProvider<bool>(
 final wordOfTheDayProvider = FutureProvider.family<DailyWord?, DateTime>(
   (ref, day) => ref.watch(searchRepositoryProvider).wordOfTheDay(day),
 );
+
+/// Every Lexery word by headword and how far along it is — what the
+/// landing board tints its tiles by. A stream, so a word added from the
+/// board is tinted by the time they're back on it.
+final familiarityProvider = StreamProvider<Map<String, Familiarity>>(
+  (ref) => ref.watch(studyRepositoryProvider).watchFamiliarity(),
+);
+
+/// A fresh draw of words for the landing board, with a few of the
+/// person's own Lexery words mixed in so some tiles are familiar from
+/// the start. Not autoDispose: the Search tab stays alive across tab
+/// switches and the board should keep the words it has; "shuffle"
+/// invalidates it.
+final boardWordsProvider = FutureProvider<List<String>>((ref) async {
+  final random = Random();
+  final words = await ref.watch(searchRepositoryProvider).boardWords();
+  final own = (await ref.watch(familiarityProvider.future)).keys.where(isBoardable).toList()
+    ..shuffle(random);
+  final mixed = [...own.take(14), ...words]..shuffle(random);
+  return mixed;
+});
 
 /// Light, dark or system — what `MaterialApp.themeMode` follows.
 final themeModeProvider = StreamProvider<ThemeMode>(
@@ -342,4 +378,127 @@ final authServiceProvider = Provider<AuthService>((ref) => const NoAuthService()
 /// The signed-in user, live. Null when signed out.
 final authUserProvider = StreamProvider<AuthUser?>(
   (ref) => ref.watch(authServiceProvider).changes,
+);
+
+// ---------------------------------------------------------------------------
+// Premium
+// ---------------------------------------------------------------------------
+
+/// Overridden in `main`: RevenueCat when the build has a key, the in-memory
+/// fake in debug builds without one. The default has no store at all.
+final purchasesServiceProvider = Provider<PurchasesService>((ref) => const NoPurchasesService());
+
+/// The person's premium standing, live: a purchase, restore or expiry
+/// changes it and every gate below follows without a restart.
+final premiumStatusProvider = StreamProvider<PremiumStatus>(
+  (ref) => ref.watch(purchasesServiceProvider).changes,
+);
+
+/// The synchronous answer the Games tab and the routes need. Falls back
+/// to the service's last known standing for the frame before the stream's
+/// first value.
+final isPremiumProvider = Provider<bool>((ref) {
+  final status = ref.watch(premiumStatusProvider).valueOrNull;
+  return (status ?? ref.watch(purchasesServiceProvider).current).isPremium;
+});
+
+/// The live store prices. `autoDispose` so a paywall opened after a
+/// store hiccup asks again rather than showing the cached failure.
+final storeOffersProvider = FutureProvider.autoDispose<StoreOffers>(
+  (ref) => ref.watch(purchasesServiceProvider).offers(),
+);
+
+/// Overridden in `main` with the backend-backed service; the default
+/// can't say how many places remain, so the paywall never shows a number.
+final founderServiceProvider = Provider<FounderService>(
+  (ref) => FakeFounderService(remaining: null),
+);
+
+/// The Founding Member allocation, fetched when a paywall opens. Null when
+/// the backend couldn't say. `autoDispose`: a count is only shown fresh.
+final founderStatusProvider = FutureProvider.autoDispose<FounderStatus?>(
+  (ref) => ref.watch(founderServiceProvider).status(),
+);
+
+/// The unsolicited-prompt bookkeeping. Created once and kept: its session
+/// count and "shown this session" flag must outlive any screen.
+final premiumPromptsProvider = Provider<PremiumPrompts>(
+  (ref) => PremiumPrompts(ref.watch(settingsRepositoryProvider)),
+);
+
+// ---------------------------------------------------------------------------
+// Ads (free tier only)
+// ---------------------------------------------------------------------------
+
+/// Overridden in `main` with the AdMob-backed service on Android/iOS.
+/// The default shows nothing.
+final adsServiceProvider = Provider<AdsService>((ref) => const NoAdsService());
+
+// ---------------------------------------------------------------------------
+// Group puzzles (v1.1)
+// ---------------------------------------------------------------------------
+
+/// Overridden in `main` with the Supabase-backed API when the build has a
+/// backend.
+final groupsApiProvider = Provider<GroupsApi>((ref) => const NoGroupsApi());
+
+final groupPuzzleServiceProvider = Provider<GroupPuzzleService>(
+  (ref) => GroupPuzzleService(
+    ref.watch(groupsApiProvider),
+    ref.watch(crosswordRepositoryProvider),
+    ref.watch(studyRepositoryProvider),
+    ref.watch(appDatabasesProvider).user,
+  ),
+);
+
+/// The groups this person belongs to. Re-fetched on every visit, and
+/// after anything that changes the list.
+final myGroupsProvider = FutureProvider.autoDispose<List<Group>>(
+  (ref) => ref.watch(groupsApiProvider).myGroups(),
+);
+
+final groupProvider = FutureProvider.autoDispose.family<Group?, String>(
+  (ref, id) => ref.watch(groupsApiProvider).group(id),
+);
+
+final groupMembersProvider = FutureProvider.autoDispose.family<List<GroupMember>, String>(
+  (ref, id) => ref.watch(groupsApiProvider).members(id),
+);
+
+final groupPoolProvider = FutureProvider.autoDispose.family<List<GroupWord>, String>(
+  (ref, id) => ref.watch(groupsApiProvider).pool(id),
+);
+
+/// Today's published puzzle for a group, or null if nobody has opened it
+/// yet today.
+final groupTodayPuzzleProvider = FutureProvider.autoDispose.family<GroupPuzzle?, String>(
+  (ref, id) => ref.watch(groupPuzzleServiceProvider).todayPuzzle(id),
+);
+
+final groupScoresProvider = FutureProvider.autoDispose.family<List<GroupScore>, String>(
+  (ref, puzzleId) => ref.watch(groupsApiProvider).scores(puzzleId),
+);
+
+// ---------------------------------------------------------------------------
+// Global leaderboard
+// ---------------------------------------------------------------------------
+
+/// Overridden in `main` with the Supabase-backed API when there's a backend.
+final leaderboardApiProvider = Provider<LeaderboardApi>((ref) => const NoLeaderboardApi());
+
+final scoreSyncProvider = Provider<ScoreSync>(
+  (ref) => ScoreSync(ScoreRepository(ref.watch(appDatabasesProvider).user), ref.watch(leaderboardApiProvider)),
+);
+
+final leaderboardProfileProvider = FutureProvider.autoDispose<LeaderboardProfile>(
+  (ref) => ref.watch(leaderboardApiProvider).profile(),
+);
+
+/// 'week' or 'all'.
+final leaderboardProvider = FutureProvider.autoDispose.family<List<LeaderboardEntry>, String>(
+  (ref, period) => ref.watch(leaderboardApiProvider).top(period: period),
+);
+
+final myRankProvider = FutureProvider.autoDispose.family<MyRank?, String>(
+  (ref, period) => ref.watch(leaderboardApiProvider).myRank(period: period),
 );

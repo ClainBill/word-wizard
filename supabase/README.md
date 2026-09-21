@@ -1,4 +1,4 @@
-# Lexery backend
+# Word Wizard backend
 
 Supabase (Postgres + Auth + Edge Functions) behind an offline-first app.
 What lives here, and the rule for all of it: **the app never holds a
@@ -15,7 +15,9 @@ supabase/
     _shared/                  http, supabase clients, OpenAI, RevenueCat, prompts
     ai-crossword-review/      POST — the crossword editorial pass
     ai-feature-clues/         POST — recall-game clues
-    revenuecat-webhook/       POST — RevenueCat → entitlements
+    revenuecat-webhook/       POST — RevenueCat → entitlements (+ founder sales)
+    founder-status/           POST — Founding Member places left + paywall config
+    founder-reserve/          POST — hold a founder place for ten minutes
     entitlement-refresh/      POST — app asks for a fresh entitlement
     feedback/                 POST — bug reports (replaces tool/feedback/Code.gs)
     delete-account/           POST — in-app deletion + external requests
@@ -57,16 +59,34 @@ identical, only the link and the secrets differ.
 
 ### Auth providers
 
-Dashboard → Authentication → Providers:
+The app offers Apple, Google and email (`lib/services/auth_service.dart`,
+`lib/features/account/sign_in_sheet.dart`). Dashboard → Authentication →
+Providers:
 
-- **Apple** — needs the Services ID, team id, key id and .p8 from the
-  Apple developer account (required on iOS because Google sign-in is
-  offered).
-- **Google** — OAuth client ids for iOS, Android and web.
-- **Email** — magic link. Keep confirmations off for the link flow.
+- **Apple** — on iOS the app uses Apple's native sheet and hands Supabase
+  the identity token (`signInWithIdToken`, with a nonce); on Android it
+  goes through Supabase's hosted OAuth flow in the browser. Both need the
+  provider on: Services ID, team id, key id and the .p8 from the Apple
+  developer account. Add the iOS bundle id to the provider's *Client IDs*
+  so native tokens verify. Required on iOS because Google is offered. The
+  Xcode target already carries the Sign in with Apple entitlement
+  (`ios/Runner/Runner.entitlements`); the capability must also be on the
+  App ID in the developer portal.
+- **Google** — with `--dart-define=GOOGLE_WEB_CLIENT_ID=…` (and
+  `GOOGLE_IOS_CLIENT_ID=…` for iOS) the app uses the native account picker
+  and `signInWithIdToken`; without them it falls back to the hosted OAuth
+  flow, which needs only this provider set up. Create the OAuth clients in
+  Google Cloud (web, Android with the signing SHA-1s, iOS with the bundle
+  id); the *web* client id + secret go in the provider here, and the web
+  id is also what Android passes as `serverClientId`. On iOS the reversed
+  iOS client id must be added to `CFBundleURLSchemes` in Info.plist.
+- **Email** — magic link plus the code in the template. Keep confirmations
+  off for the link flow.
 
-Set *Site URL* / *Redirect URLs* to the app's deep link (`lexery://auth`
-until decided; update config.toml to match).
+The first sign-in by any route creates the account; Supabase links a
+second route with the same verified email to the same account. Set
+*Site URL* / *Redirect URLs* to the app's deep link (`lexery://auth`;
+config.toml matches) — the hosted OAuth flows redirect there too.
 
 ### Email (sign-in mail)
 
@@ -89,16 +109,70 @@ Postmark when there is a domain.
 
 ### RevenueCat
 
-1. RevenueCat project with the App Store and Play apps; products mapped to
-   one entitlement whose id is exactly `premium`
-   (`_shared/revenuecat.ts` → `premiumEntitlementId`).
+The offer is defined in *docs/Premium Offers Implementation
+Specification*: monthly, annual, and a one-time Founding Member product
+capped at 500 completed purchases.
+
+1. RevenueCat project with the App Store and Play apps. Products, with
+   these exact identifiers in both stores (spec §6.1):
+   `premium_monthly_v1` and `premium_annual_v1` (auto-renewing, same
+   subscription group / base-plan family), `premium_founder_lifetime_v1`
+   (non-consumable, one-time). All three attached to **one entitlement
+   whose id is exactly `premium_active`** (`_shared/revenuecat.ts` →
+   `premiumEntitlementId`; the app's `domain/premium/premium.dart` names
+   the same one), in one offering (`default`).
 2. *Integrations → Webhooks*: URL
    `https://<ref>.supabase.co/functions/v1/revenuecat-webhook`,
    Authorization header value `Bearer <REVENUECAT_WEBHOOK_SECRET>`.
-3. The app configures the RevenueCat SDK with the **Supabase user id** as
+3. The two **public** SDK keys (Apple, Google) go in the app's
+   `AppEnvironment` (`revenueCatAppleKey` / `revenueCatGoogleKey`). The
+   **secret** key is `REVENUECAT_API_KEY` here. Until the app has a key, a
+   debug build uses an in-memory store (sample prices, instant purchases)
+   and a release build sells nothing.
+4. The app configures the RevenueCat SDK with the **Supabase user id** as
    the app user id at sign-in. That is the whole mapping: the webhook
    looks up entitlements by that id, and anonymous RevenueCat ids are
    ignored until the user signs in and the SDK aliases them.
+
+**Founding Member inventory** (spec §6.3) is server-side, in
+`20260919000000_premium_offers.sql`: `founder_campaigns` (cap 500,
+`active`, `version`), `founder_reservations` (a ten-minute hold taken by
+`founder-reserve` right before the store sheet opens; the campaign row is
+locked while counting, so the last place can't go twice) and
+`founder_sales` (one row per store transaction, written by the webhook /
+`entitlement-refresh` from the subscriber's `non_subscriptions`; a
+refund sets `refunded_at` and hands the place back while the campaign is
+still active). When sales reach the cap the campaign flips `active =
+false` and is never reopened by a refund — a future lifetime campaign is
+a new row. `founder-status` (public) is the only source the app shows a
+count from, and includes `app_config.premium_offers` (paywall variant,
+`founding_visible`, prompt thresholds). To pause the founder offer
+without touching inventory: set `founding_visible` to `false` there.
+
+Store products stay purchasable after the cap unless you also pause them
+in the stores; the backend still records such a sale (it can't refuse
+money already taken) and the count simply passes 500, so pause the
+product listings when the campaign closes.
+
+### Groups (v1.1)
+
+No setup beyond the migration. The app reads and writes `groups`,
+`group_members`, `group_words`, `group_puzzles` and `group_scores` under
+the caller's JWT (RLS), and calls `group_create`, `group_join` and
+`group_publish_puzzle`. Design and what's deferred: `docs/Group Puzzles
+v1.1.md`.
+
+### Leaderboard
+
+`20260921000000_leaderboard.sql` (+ `20260922000000_leaderboard_public.sql`):
+`puzzle_scores` (one row per play, own rows only, capped at 12 plays per
+game per day), `profiles.public_name` + `leaderboard_opt_in`, and two
+`security definer` functions — `leaderboard(period, limit)`, readable
+with the anon key and returning only opted-in people's public names,
+summed points and ranks, and `my_leaderboard_rank(period)`, signed-in only.
+Scores are computed on the device (`lib/domain/games/scoring.dart`) and
+uploaded by `ScoreSync`; the server sums. `period` is `week` (from Monday,
+UTC) or `all`.
 
 ### Feedback
 

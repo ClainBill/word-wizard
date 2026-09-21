@@ -7,6 +7,7 @@ import '../../services/api_key_store.dart';
 import '../../services/feedback_config.dart';
 import 'account_section.dart';
 import 'api_key_sheet.dart';
+import 'premium_section.dart';
 import 'voice_picker_sheet.dart';
 
 class SettingsScreen extends ConsumerWidget {
@@ -33,6 +34,8 @@ class SettingsScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         children: [
+          const PremiumSection(),
+          const Divider(),
           const AccountSection(),
           const Divider(),
           ListTile(
@@ -214,8 +217,9 @@ class SettingsScreen extends ConsumerWidget {
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Text(
-              'Lexery is an offline, ad-free advanced-English vocabulary '
-              'dictionary and flashcard app. Dictionary content is derived from '
+              'Word Wizard is an offline advanced-English vocabulary '
+              'dictionary and flashcard app. Your Lexery is the store of words '
+              'you\'re studying and know. Dictionary content is derived from '
               'the English Wiktionary via the Kaikki.org project, licensed under '
               'CC BY-SA 3.0 and GFDL.',
             ),
@@ -226,6 +230,18 @@ class SettingsScreen extends ConsumerWidget {
             subtitle: const Text('Wiktionary, ENABLE, WordNet and the rest, and their terms'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/licences'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.description_outlined),
+            title: const Text('Terms of use'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/legal/terms'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.privacy_tip_outlined),
+            title: const Text('Privacy policy'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/legal/privacy'),
           ),
           const ListTile(
             leading: Icon(Icons.info_outline),

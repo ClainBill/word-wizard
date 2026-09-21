@@ -1,13 +1,17 @@
 1. Decide the launch offering
 
  - [x] Finalise the app name and check app-store, domain, and trademark conflicts.
-  Lexery.
+  Word Wizard (decided 2026-09-20, back from "Lexery": more marketable, works in adverts and the logo). "Lexery" stays as the name of the store of words you're studying and know — "Add to Lexery", "In Lexery".
  - [ ] Finalise the icon/logo
- - [ ] Define exactly what is free and what premium unlocks.
- - [ ] Choose monthly/yearly subscriptions or a one-time purchase. Avoid promising unlimited ongoing AI usage through a small lifetime payment.
+ - [x] Define exactly what is free and what premium unlocks.
+  Per *Premium Offers Implementation Specification* (19 Sept 2026): free = dictionary, Reader, lists, SRS flashcards (plain flip, no recall games), one labelled sample Mini crossword without the AI editor, with ads; Premium = daily personalized crosswords with the AI editor, Word Hunt, recall games in study, shared friend groups (v1.1), no ads. Implemented: Games tab gate, locked preview, paywall.
+ - [x] Choose monthly/yearly subscriptions or a one-time purchase. Avoid promising unlimited ongoing AI usage through a small lifetime payment.
+  Monthly $4.99, Annual $29.99, Founding Member $34.99 one-time capped at 500 completed purchases (real cap, server-enforced). Lifetime = "as long as Word Wizard and its service operate", fair-use limits on server-generated content (terms draft).
  - [ ] Set AI allowances and group-puzzle creation limits.
- - [ ] Decide whether free users can join puzzles created by premium friends.
- - [ ] Decide whether premium follows the same app account between Android and iPhone.
+ - [x] Decide whether free users can join puzzles created by premium friends.
+  Yes: a free account can join a group by code, share words and see the leaderboard; playing the group puzzle needs Premium (paywall with the puzzle as destination). Creating a group needs Premium.
+ - [x] Decide whether premium follows the same app account between Android and iPhone.
+  Yes: the RevenueCat app user id is the Supabase user id, so a verified purchase unlocks the account on both platforms; restore still follows each store's rules.
  - [ ] Choose launch countries and intended age group.
  - [ ] Define offline behaviour: which games work offline and when premium status needs refreshing.
   Today everything works offline — dictionary, study, Reader, both games, reminders. The only network use is the optional OpenAI features (user's own key) and sending a bug report (queued offline). Premium refresh rules are still to decide.
@@ -33,7 +37,7 @@ Suggested stack: Supabase + RevenueCat, with a separate worker for shared puzzle
  - [ ] Create separate development and production environments.
   Code is environment-neutral (`supabase/config.toml`); create `lexery-dev` and `lexery-prod` projects, link, `db push`, `functions deploy`, set secrets. App side (`--dart-define=ENV=`) comes with sign-in.
  - [x] Implement sign-up, sign-in, sign-out, and account recovery.
-  Email link/code (Settings → Account); sign-up is implicit, recovery is the same flow (no password). Apple and Google sign-in to add once the developer accounts exist.
+  Email link/code, Apple and Google (Settings → Account, `lib/features/account/sign_in_sheet.dart`); sign-up is implicit, recovery is the same flow (no password). Apple is native on iOS (entitlement in `ios/Runner/Runner.entitlements`), via the browser on Android; Google is native with the client ids (`GOOGLE_WEB_CLIENT_ID`, `GOOGLE_IOS_CLIENT_ID` defines), via the browser without. Providers still to be configured in Supabase and the developer consoles — see `supabase/README.md` → Auth providers.
  - [ ] Preserve existing local vocabulary and progress when a guest creates an account.
   Satisfied by design at v1: study data stays on the device; an account adds premium/AI, moves nothing.
  - [x] Give online records globally unique IDs.
@@ -75,19 +79,27 @@ Suggested stack: Supabase + RevenueCat, with a separate worker for shared puzzle
 5. Implement purchases end to end
 
  - [ ] Create subscription products in App Store Connect, including a subscription group.
+  Ids: `premium_monthly_v1`, `premium_annual_v1` (one group), `premium_founder_lifetime_v1` (non-consumable). See supabase/README.md → RevenueCat.
  - [ ] Create matching Google Play subscriptions and base plans.
  - [ ] Configure prices, availability, and any trials.
  - [ ] Connect both stores to RevenueCat.
   Server side ready: `revenuecat-webhook` (idempotent, reconciles from a fresh subscriber fetch) and `entitlement-refresh`; entitlement id must be `premium`.
  - [ ] Map both stores’ products to one entitlement, such as premium.
- - [ ] Integrate the RevenueCat Flutter SDK using a stable app account ID.
- - [ ] Display store-provided prices and billing periods on the paywall.
- - [ ] Explain included features, recurring billing, and trial terms before purchase.
- - [ ] Add Restore Purchases and Manage Subscription.
- - [ ] Handle pending, cancelled, failed, and successful purchases.
+  Entitlement id must be `premium_active`.
+ - [x] Integrate the RevenueCat Flutter SDK using a stable app account ID.
+  `purchases_flutter` behind `PurchasesService`; configured with the Supabase user id at sign-in, `logOut` at sign-out. Needs the public SDK keys in `AppEnvironment` to go live.
+ - [x] Display store-provided prices and billing periods on the paywall.
+  Every price string is the store's; skeletons while loading; the annual saving and per-month figure are computed from live prices only.
+ - [x] Explain included features, recurring billing, and trial terms before purchase.
+  Four benefits, per-option renewal lines, button subtext, and a full disclosure paragraph in body-size type. No trial at launch.
+ - [x] Add Restore Purchases and Manage Subscription.
+  Restore on the paywall and in Settings; Manage subscription in Settings (RevenueCat management URL, store fallback).
+ - [x] Handle pending, cancelled, failed, and successful purchases.
+  Paywall states: loading, loaded, store unavailable (+ retry), purchasing, pending (+ refresh), cancelled (quiet), failed (store reason when actionable), sold out, already entitled, success.
  - [x] Configure authenticated purchase webhooks and retry-safe processing.
   Shared-secret header, event id recorded once, state derived by re-fetching the subscriber so redelivery and ordering don't matter. Dashboard side: paste the URL and secret.
- - [ ] Handle renewal, expiration, billing problems, refunds, and revoked purchases.
+ - [x] Handle renewal, expiration, billing problems, refunds, and revoked purchases.
+  Derived from the subscriber on every webhook/refresh: `access` ∈ subscription | lifetime | grace_period | billing_retry | expired; grace keeps access, retry and refund don't; data is never deleted. App mirrors the same states from the SDK's customer info.
  - [x] Reconcile premium status when notifications are delayed or missed.
   `entitlement-refresh`: the app calls it after purchase/restore and on launch when its cache is stale.
  - [ ] Verify Google purchase acknowledgement is handled correctly.
@@ -97,7 +109,9 @@ RevenueCat entitlements connect products to access; its webhooks support an auth
 
 6. Complete friends and progress sharing
 
+ - [x] Global puzzle leaderboard (2026-09-20): opt-in public name on the profile, scores computed on the device (`lib/domain/games/scoring.dart`) and summed by the server, this week / all time, own rank; only opted-in names and points are visible, to signed-in users. Grants tightened so the anon key can't read it.
  - [ ] Implement usernames or friend invite codes.
+  Group invite codes exist (v1.1 groups); a friend graph does not.
  - [ ] Add request, accept, decline, remove, and block actions.
  - [ ] Let users choose which progress statistics friends can see.
  - [ ] Upload the required progress summaries and show when they last synced.
@@ -143,7 +157,7 @@ Apple’s guidelines cover account deletion, login options, and AI data-sharing 
 9. Prepare production builds
 
  - [x] Finalise permanent Android application ID and Apple bundle ID.
-  `com.willcharlesgill.wordwizard` on both, kept through the Lexery rename (not user-facing — DESIGN.md). It can never change after the first upload, so if it should say `lexery`, now is the only time.
+  `com.willcharlesgill.wordwizard` on both, kept through the Word Wizard rename (not user-facing — DESIGN.md). It can never change after the first upload, so if it should say `lexery`, now is the only time.
  - [ ] Configure Android upload signing and Play App Signing; back up the upload key.
   Gradle is wired: `android/key.properties` (gitignored) selects the upload keystore, falling back to the debug key when absent. Still to do: create the keystore (`android/key.properties.example` has the command), back it up, and opt into Play App Signing in the console.
  - [ ] Configure Apple signing, certificates, and provisioning.
@@ -160,8 +174,8 @@ Apple’s guidelines cover account deletion, login options, and AI data-sharing 
   `ios/Runner/PrivacyInfo.xcprivacy` added and in the Runner target: no tracking, no collected data, file-timestamp (C617.1) and UserDefaults (CA92.1) reasons. Plugins ship their own manifests. Re-check Xcode's privacy report on the archive.
  - [x] Measure download size, installed size, and first-launch storage needs.
   Measured 2026-09-15: dictionary.db 464 MB raw, 214 MB gzip; fat release APK 232 MB. Installed ≈ 500 MB+ (the DB is copied out of the bundle on first launch, so briefly ~2×). Over Google Play's 200 MB base-module limit and Apple's 200 MB cellular threshold — see next item.
- - [ ] Optimise or plan asset delivery for the dictionary: the uploaded database alone was approximately 464 MB uncompressed.
-  Blocking for Play. Where the 464 MB goes (dbstat, 2026-09-15): examples 151 MB + their FTS index 48 MB, entries 64 MB, senses 62 MB, forms 28 MB, indexes ~60 MB — 740k entries, 921k senses, 546k examples. Options, cheapest first: shrink the DB (examples are 43% — cap them per sense or drop them for rare words; the example FTS index alone is 48 MB; then `VACUUM`); an install-time Play Asset Delivery pack (up to 2 GB, base stays under 200 MB); or download the dictionary on first launch from a CDN. Decide before the first AAB.
+ - [x] Optimise or plan asset delivery for the dictionary: the uploaded database alone was approximately 464 MB uncompressed.
+  Done 2026-09-21: Android ships it as an install-time Play Asset Delivery pack (`android/dictionary_pack`; base module stays ~40 MB), streamed to app storage on first launch with progress on the launch screen; iOS opens it in place from the bundle (no copy). Build the Play upload with `flutter build appbundle`. Earlier notes: Where the 464 MB goes (dbstat, 2026-09-15): examples 151 MB + their FTS index 48 MB, entries 64 MB, senses 62 MB, forms 28 MB, indexes ~60 MB — 740k entries, 921k senses, 546k examples. Options, cheapest first: shrink the DB (examples are 43% — cap them per sense or drop them for rare words; the example FTS index alone is 48 MB; then `VACUUM`); an install-time Play Asset Delivery pack (up to 2 GB, base stays under 200 MB); or download the dictionary on first launch from a CDN. Decide before the first AAB.
 
 Apple currently requires Xcode 26 or later with the relevant version-26 SDK. Google’s target-API and native-library compatibility requirements also need checking against the final build.
 

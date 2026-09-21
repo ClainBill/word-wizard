@@ -3,13 +3,11 @@ import 'dart:math';
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
-import 'package:flutter/services.dart' show rootBundle;
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../../domain/models/daily_word.dart';
 import '../../domain/models/entry.dart';
 import '../../domain/study/quiz_example.dart';
+import 'dictionary_installer.dart';
 
 part 'dictionary_database.g.dart';
 
@@ -119,41 +117,28 @@ class DictionaryDatabase extends _$DictionaryDatabase {
   @override
   int get schemaVersion => 1;
 
-  // Bump whenever the bundled `assets/db/dictionary.db` asset changes, so
-  // devices holding an already-copied (and now stale) database file — e.g.
-  // an install from before the full dictionary replaced the 469-entry
-  // curated core set — re-copy instead of silently keeping the old data.
+  // Bump whenever `assets/db/dictionary.db` changes, so devices holding an
+  // already-copied (and now stale) database file — e.g. an install from
+  // before the full dictionary replaced the 469-entry curated core set —
+  // re-copy instead of silently keeping the old data.
   static const _assetVersion = '3-variants';
 
-  static Future<String> resolveFilePath() async {
-    final dir = await getApplicationSupportDirectory();
-    return p.join(dir.path, 'dictionary.db');
-  }
+  /// Where the dictionary is on this device — set by [openBundled], which
+  /// must have run first. The user database attaches this path.
+  static String? _openedPath;
 
-  static Future<String> _versionMarkerPath() async {
-    final dir = await getApplicationSupportDirectory();
-    return p.join(dir.path, 'dictionary.version');
-  }
+  static String get openedPath =>
+      _openedPath ?? (throw StateError('DictionaryDatabase.openBundled has not run'));
 
-  /// Copies the bundled `assets/db/dictionary.db` asset to a real file the
-  /// first time the app runs (or whenever [_assetVersion] moves past what's
-  /// already on disk), then opens it. Otherwise just opens the existing
-  /// copy — re-copying a 400&nbsp;MB asset on every launch would be wasteful.
-  static Future<DictionaryDatabase> openBundled() async {
-    final file = File(await resolveFilePath());
-    final versionFile = File(await _versionMarkerPath());
-    final onDiskVersion = await versionFile.exists() ? await versionFile.readAsString() : null;
-
-    if (!await file.exists() || onDiskVersion != _assetVersion) {
-      final bytes = await rootBundle.load('assets/db/dictionary.db');
-      await file.create(recursive: true);
-      await file.writeAsBytes(
-        bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
-      );
-      await versionFile.writeAsString(_assetVersion);
-    }
+  /// Opens the bundled dictionary, getting it onto disk first if this
+  /// platform needs that (see [DictionaryInstaller]). [onProgress] reports
+  /// a copy in progress so the launch screen can show it; the marker
+  /// [_assetVersion] decides when an existing copy is stale.
+  static Future<DictionaryDatabase> openBundled({void Function(double)? onProgress}) async {
+    final path = await DictionaryInstaller.ensure(version: _assetVersion, onProgress: onProgress);
+    _openedPath = path;
     return DictionaryDatabase(
-      NativeDatabase.createInBackground(file, setup: (db) {
+      NativeDatabase.createInBackground(File(path), setup: (db) {
         db.execute('PRAGMA query_only = ON;');
       }),
     );
@@ -691,6 +676,66 @@ class DictionaryDatabase extends _$DictionaryDatabase {
       gloss: row.read<String>('gloss'),
       example: row.readNullable<String>('example'),
     );
+  }
+
+  /// Words for the search screen's landing board: a random draw from the
+  /// curated `daily_words` pool — the words worth learning — topped up
+  /// with lemmas from the middle of the frequency range, so the board is
+  /// neither all obscure nor all obvious. Only plain lowercase words of
+  /// a playable length come back (see `isBoardable`), deduplicated,
+  /// in random order.
+  ///
+  /// Both halves are cheap: the daily pool is a couple of thousand rows,
+  /// and the frequency draw picks random ranks and looks each up on the
+  /// index rather than sorting the table.
+  Future<List<String>> boardWords({int count = 90, Random? random}) async {
+    final rand = random ?? Random();
+    final words = <String>{};
+
+    final hasPool = (await customSelect(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'daily_words'",
+    ).getSingle()).read<int>('n') > 0;
+    if (hasPool) {
+      final curated = await customSelect(
+        '''
+        SELECT headword FROM daily_words
+        WHERE headword NOT GLOB '*[^a-z]*' AND length(headword) BETWEEN 3 AND 12
+        ORDER BY RANDOM() LIMIT ?
+        ''',
+        variables: [Variable.withInt((count * 2) ~/ 3)],
+      ).get();
+      words.addAll(curated.map((r) => r.read<String>('headword')));
+    }
+
+    // Ranks 8k–60k: past the everyday core, before the long tail. Inflected
+    // and variant-spelling entries are skipped by their first gloss.
+    const lo = 8000, hi = 60000;
+    final ranks = <int>{};
+    while (ranks.length < count * 3) {
+      ranks.add(lo + rand.nextInt(hi - lo));
+    }
+    final placeholders = ranks.map((_) => '?').join(',');
+    final rows = await customSelect(
+      '''
+      SELECT e.headword FROM entries e
+      WHERE e.frequency_rank IN ($placeholders)
+        AND e.headword NOT GLOB '*[^a-z]*' AND length(e.headword) BETWEEN 3 AND 12
+        AND NOT EXISTS (
+          SELECT 1 FROM senses s WHERE s.entry_id = e.id AND s.sense_order = 0 AND (
+            s.gloss LIKE 'plural of %' OR s.gloss LIKE 'present participle%'
+            OR s.gloss LIKE 'past participle%' OR s.gloss LIKE 'simple past%'
+            OR s.gloss LIKE 'third-person%' OR s.gloss LIKE 'comparative form%'
+            OR s.gloss LIKE 'superlative form%' OR s.gloss LIKE 'inflection of %'
+            OR s.gloss LIKE 'alternative form of %' OR s.gloss LIKE 'alternative spelling of %'
+            OR s.gloss LIKE 'obsolete %' OR s.gloss LIKE 'misspelling of %'))
+      ''',
+      variables: ranks.map(Variable.withInt).toList(),
+    ).get();
+    for (final r in rows) {
+      if (words.length >= count) break;
+      words.add(r.read<String>('headword'));
+    }
+    return words.toList()..shuffle(rand);
   }
 
   /// Loads every (headword, pos) row for [headword] and merges them into one

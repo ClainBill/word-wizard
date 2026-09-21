@@ -1,5 +1,9 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
+import '../../domain/crossword/crossword_models.dart';
+import '../../domain/hunt/hunt_models.dart';
 import '../../domain/models/progress.dart';
 import '../../domain/models/study_direction.dart';
 import '../user/user_database.dart';
@@ -242,12 +246,15 @@ class ProgressRepository {
           .add(r.read<int>('active_ms'));
     }
 
+    final words = await _wordsSolved();
+
     return [
       for (final g in groups)
         () {
           final game = g.read<String>('game');
           final difficulty = g.read<String>('difficulty');
           final times = timesByGroup['$game/$difficulty'] ?? const <int>[];
+          final solved = words['$game/$difficulty'];
           return GameDifficultyStats(
             game: game,
             difficulty: difficulty,
@@ -257,9 +264,73 @@ class ProgressRepository {
             best: times.isEmpty ? null : Duration(milliseconds: times.first),
             median: times.isEmpty ? null : Duration(milliseconds: _median(times)),
             totalTime: Duration(milliseconds: g.read<int>('total_ms')),
+            wordsSolved: solved?.words ?? 0,
+            unfinishedProgress: solved == null || solved.unfinished == 0
+                ? null
+                : solved.unfinishedFill / solved.unfinished,
           );
         }(),
     ];
+  }
+
+  /// Per game/difficulty: words got right across every puzzle, and how
+  /// far the unfinished ones got — read from each puzzle's own progress,
+  /// since a puzzle abandoned at 70% is 70% of the words learned, not
+  /// nothing. Keyed like `_gameStats`' groups.
+  Future<Map<String, ({int words, int unfinished, double unfinishedFill})>> _wordsSolved() async {
+    final out = <String, ({int words, int unfinished, double unfinishedFill})>{};
+    void add(String key, int words, {double? unfinishedFill}) {
+      final cur = out[key] ?? (words: 0, unfinished: 0, unfinishedFill: 0);
+      out[key] = (
+        words: cur.words + words,
+        unfinished: cur.unfinished + (unfinishedFill == null ? 0 : 1),
+        unfinishedFill: cur.unfinishedFill + (unfinishedFill ?? 0),
+      );
+    }
+
+    for (final row in await _db.select(_db.crosswordPuzzles).get()) {
+      try {
+        final puzzle = CrosswordPuzzle.fromJson(jsonDecode(row.gridJson) as Map<String, dynamic>);
+        final filled = Map<String, String>.from(jsonDecode(row.progressJson) as Map);
+        var solved = 0;
+        for (final word in puzzle.words) {
+          var complete = true;
+          for (var i = 0; i < word.cells.length && complete; i++) {
+            complete = filled['${word.cells[i].$1},${word.cells[i].$2}'] == word.answer[i];
+          }
+          if (complete) solved++;
+        }
+        final total = puzzle.words.length;
+        add(
+          'crossword/${row.difficulty}',
+          row.completed ? total : solved,
+          unfinishedFill: row.completed || filled.isEmpty ? null : (total == 0 ? 0 : solved / total),
+        );
+      } catch (_) {
+        // A row that won't decode counts nothing.
+      }
+    }
+
+    for (final row in await _db.select(_db.huntPuzzles).get()) {
+      try {
+        final puzzle = HuntPuzzle.fromJson(jsonDecode(row.puzzleJson) as Map<String, dynamic>);
+        final map = jsonDecode(row.progressJson) as Map<String, dynamic>;
+        final found = {for (final w in map['found'] as List? ?? const []) w as String};
+        // Every accepted word counts as a word solved; progress toward
+        // finishing is measured on the required ones.
+        final required = found.where((w) {
+          final kind = puzzle.classify(w);
+          return kind == HuntWordClass.anchor || kind == HuntWordClass.main;
+        }).length;
+        final total = puzzle.requiredCount;
+        add(
+          'hunt/',
+          found.length,
+          unfinishedFill: row.completed || found.isEmpty ? null : (total == 0 ? 0 : required / total),
+        );
+      } catch (_) {}
+    }
+    return out;
   }
 
   static int _median(List<int> sorted) {
@@ -276,15 +347,21 @@ class ProgressRepository {
     return _db
         .customSelect(
           '''
-          SELECT d, SUM(r) AS r, SUM(l) AS l, SUM(g) AS g FROM (
-            SELECT date(reviewed_at, 'unixepoch', 'localtime') AS d, COUNT(*) AS r, 0 AS l, 0 AS g
+          SELECT d, SUM(r) AS r, SUM(l) AS l, SUM(g) AS g, SUM(ms) AS ms FROM (
+            SELECT date(reviewed_at, 'unixepoch', 'localtime') AS d, COUNT(*) AS r, 0 AS l, 0 AS g, 0 AS ms
               FROM review_log WHERE reviewed_at >= $since GROUP BY d
             UNION ALL
-            SELECT date(looked_up_at, 'unixepoch', 'localtime'), 0, COUNT(*), 0
+            SELECT date(looked_up_at, 'unixepoch', 'localtime'), 0, COUNT(*), 0, 0
               FROM lookup_log WHERE looked_up_at >= $since GROUP BY 1
             UNION ALL
-            SELECT date(completed_at, 'unixepoch', 'localtime'), 0, 0, COUNT(*)
+            -- A puzzle counts on the day it was played, finished or not,
+            -- with the time it took; a finish on a later day counts there too.
+            SELECT date(started_at, 'unixepoch', 'localtime'), 0, 0, COUNT(*), COALESCE(SUM(active_ms), 0)
+              FROM game_results WHERE started_at >= $since GROUP BY 1
+            UNION ALL
+            SELECT date(completed_at, 'unixepoch', 'localtime'), 0, 0, COUNT(*), 0
               FROM game_results WHERE completed_at IS NOT NULL AND completed_at >= $since
+                AND date(completed_at, 'unixepoch', 'localtime') != date(started_at, 'unixepoch', 'localtime')
               GROUP BY 1
           ) GROUP BY d
           ''',
@@ -298,6 +375,7 @@ class ProgressRepository {
                 reviews: r.read<int>('r'),
                 lookups: r.read<int>('l'),
                 games: r.read<int>('g'),
+                gameMs: r.read<int>('ms'),
               ),
           };
           return [
@@ -313,6 +391,7 @@ class ProgressRepository {
                   reviews: counts?.reviews ?? 0,
                   lookups: counts?.lookups ?? 0,
                   games: counts?.games ?? 0,
+                  gameTime: Duration(milliseconds: counts?.gameMs ?? 0),
                 );
               }(),
           ];
