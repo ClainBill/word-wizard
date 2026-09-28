@@ -24,6 +24,8 @@
 //     --no-judge         skip the judge
 //     --judge-model M    default gpt-5
 //     --editor-model M   default gpt-5-mini (production)
+//     --wordlist PATH    default assets/crossword/wordlist.tsv — point it at a
+//                        baked variant to compare clue sources on the same seeds
 //
 // The LLM steps read OPENAI_API_KEY from the environment or .env and cost
 // money: roughly $0.02-0.10 per puzzle with the defaults.
@@ -52,7 +54,7 @@ Future<void> main(List<String> args) async {
   final opts = _Options.parse(args);
   final out = Directory('tool/crossword_harness/out/${opts.label}')..createSync(recursive: true);
 
-  final entries = parseWordList(File('assets/crossword/wordlist.tsv').readAsStringSync());
+  final entries = parseWordList(File(opts.wordlist).readAsStringSync());
   final byText = <String, CrosswordEntry>{};
   for (final e in entries) {
     byText.putIfAbsent(e.text, () => e);
@@ -95,6 +97,7 @@ Future<void> main(List<String> args) async {
       'editorModel': opts.editorModel,
       'judge': opts.judge && ai != null,
       'judgeModel': opts.judgeModel,
+      'wordlist': opts.wordlist,
     },
     'puzzles': results,
     'summary': summarize(results),
@@ -312,6 +315,7 @@ class _Options {
   bool judge = true;
   String judgeModel = 'gpt-5';
   String editorModel = 'gpt-5-mini';
+  String wordlist = 'assets/crossword/wordlist.tsv';
 
   static _Options parse(List<String> args) {
     final o = _Options();
@@ -334,6 +338,8 @@ class _Options {
           o.judgeModel = next();
         case '--editor-model':
           o.editorModel = next();
+        case '--wordlist':
+          o.wordlist = next();
         default:
           stderr.writeln('unknown option ${args[i]}');
           exit(64);

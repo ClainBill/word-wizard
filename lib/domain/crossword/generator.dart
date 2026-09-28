@@ -127,6 +127,7 @@ CrosswordEntry? _withEntryId(CrosswordEntry? entry, CrosswordSrsWord word) {
     isProper: entry.isProper,
     isPhrase: entry.isPhrase,
     isCrosswordese: entry.isCrosswordese,
+    isRejected: entry.isRejected,
     tags: entry.tags,
     score: entry.score,
     editorTier: entry.editorTier,
@@ -173,6 +174,7 @@ CrosswordPuzzle? generateCrossword(
 
   CrosswordPuzzle? best;
   var bestOffenderCount = 1 << 30;
+  var bestIsClean = false; // no recognizability offenders, root pairs aside
 
   for (var attempt = 0; attempt < skeletonAttempts; attempt++) {
     if (overall.elapsed > overallBudget) break;
@@ -246,12 +248,18 @@ CrosswordPuzzle? generateCrossword(
       rng: rng,
     );
 
-    final offenders = qualityOffenders(fill.values, index: fillIndex, anchorTexts: anchorTexts);
+    final quality = qualityOffenders(fill.values, index: fillIndex, anchorTexts: anchorTexts);
+    final offenders = quality + sharedRootPairs(fill.values);
     if (offenders == 0) return puzzle; // clean — stop early
     if (offenders < bestOffenderCount) {
       bestOffenderCount = offenders;
       best = puzzle;
+      bestIsClean = quality == 0;
     }
+    // Root pairs are a preference, not a gate: a few more grids to find one
+    // without, then take the best recognizable grid rather than spend the
+    // whole time budget — a 17x17 with a hundred answers often has a pair.
+    if (bestIsClean && attempt >= _rootPairAttempts) return best;
   }
 
   return best; // may be null if nothing solved at all
@@ -276,6 +284,35 @@ int qualityOffenders(
     if (entry == null || entry.score < floor) count++;
   }
   return count;
+}
+
+/// Pairs of answers in one grid that are the same word underneath —
+/// STYLES and STYLED, AGE and AGEGROUP, OIL and OILS. A solver who has just
+/// written one feels cheated by the other. Counted as offenders, so the
+/// search keeps looking for a grid without them and settles for the fewest.
+///
+/// "Same word" is an inflection-sized extension (OIL/OILS, AGE/AGED — the
+/// longer adds at most two letters) or a shared five-letter start
+/// (STYLES/STYLED). Not ARM/ARMY or ONE/STONE: three letters inside a
+/// longer word is usually coincidence.
+/// How many extra grids to try for one without shared roots.
+const _rootPairAttempts = 4;
+
+int sharedRootPairs(Iterable<String> answers) {
+  final list = answers.toSet().toList();
+  var pairs = 0;
+  for (var i = 0; i < list.length; i++) {
+    for (var j = i + 1; j < list.length; j++) {
+      final a = list[i], b = list[j];
+      final (short, long) = a.length <= b.length ? (a, b) : (b, a);
+      if (short.length < 3) continue;
+      if ((long.startsWith(short) && long.length - short.length <= 2) ||
+          (short.length >= 5 && long.substring(0, 5) == short.substring(0, 5))) {
+        pairs++;
+      }
+    }
+  }
+  return pairs;
 }
 
 CrosswordPuzzle _assemble({

@@ -171,7 +171,8 @@ summary:focus-visible{outline:2px solid var(--ochre);outline-offset:3px}
   <h1>Crossword harness: ${_esc(run['label'])}</h1>
   <p class="meta">${_esc(run['createdAt'])} · seed ${config['seed']} · ${config['count']} per size ·
   editor ${config['editor'] == true ? _esc(config['editorModel']) : 'off'} ·
-  judge ${config['judge'] == true ? _esc(config['judgeModel']) : 'off'}</p>
+  judge ${config['judge'] == true ? _esc(config['judgeModel']) : 'off'} ·
+  ${_esc(config['wordlist'] ?? 'assets/crossword/wordlist.tsv')}</p>
 </header>
 ''');
 

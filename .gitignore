@@ -92,3 +92,6 @@ tool/crossword_harness/out/
 
 # Wrangler's local cache (account details)
 site/.wrangler/
+
+# Clue bake caches and batch files (the result lives in assets/crossword/wordlist.tsv)
+tool/pipeline/out/clue_bake/

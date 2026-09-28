@@ -126,7 +126,12 @@ enum CrosswordClueType {
   fillInBlank('f'),
 
   /// Written by a model at build time, for entries with no lexical source.
-  llm('l');
+  llm('l'),
+
+  /// Written for the puzzle by the clue bake (tool/bake_crossword_clues.dart)
+  /// in a newspaper register, and passed through the same gate as every
+  /// other outside clue. Replaces an entry's WordNet options where present.
+  edited('e');
 
   final String code;
   const CrosswordClueType(this.code);
@@ -136,6 +141,7 @@ enum CrosswordClueType {
         's' => CrosswordClueType.synonym,
         'f' => CrosswordClueType.fillInBlank,
         'l' => CrosswordClueType.llm,
+        'e' => CrosswordClueType.edited,
         _ => CrosswordClueType.definition,
       };
 }
@@ -186,6 +192,11 @@ class CrosswordEntry {
   /// pool and ERG reached a shipped puzzle.
   final bool isCrosswordese;
 
+  /// Judged unfit for a puzzle by the clue bake — an abbreviation, a partial
+  /// phrase, a word nobody knows — and so kept out of the fill pool. Still
+  /// usable as an anchor: the bake clues it anyway.
+  final bool isRejected;
+
   final List<String> tags;
 
   /// Precomputed composite quality, §2.3. Higher is better; the solver
@@ -224,6 +235,7 @@ class CrosswordEntry {
     required this.isProper,
     required this.isPhrase,
     required this.isCrosswordese,
+    this.isRejected = false,
     required this.tags,
     required this.score,
     required this.editorTier,

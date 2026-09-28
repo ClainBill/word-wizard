@@ -77,7 +77,8 @@ bool inFillPool(CrosswordEntry entry) =>
     entry.clues.isNotEmpty &&
     entry.editorTier != lastResortTier &&
     entry.familiarity >= familiarityFloor(entry.length) &&
-    !entry.isCrosswordese;
+    !entry.isCrosswordese &&
+    !entry.isRejected;
 
 /// Parses `assets/crossword/wordlist.tsv`.
 ///
@@ -103,6 +104,7 @@ List<CrosswordEntry> parseWordList(String contents) {
       isProper: flags & 1 != 0,
       isPhrase: flags & 2 != 0,
       isCrosswordese: flags & 4 != 0,
+      isRejected: flags & 8 != 0,
       tags: tags.isEmpty ? const [] : tags.split(','),
       score: double.parse(f[5]),
       editorTier: int.parse(f[6]),

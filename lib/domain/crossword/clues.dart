@@ -248,6 +248,7 @@ double clueOptionWeight(CrosswordClue clue) {
   var weight = 1.0;
   switch (clue.type) {
     case CrosswordClueType.curated:
+    case CrosswordClueType.edited:
       weight *= 3.0;
     case CrosswordClueType.synonym:
       weight *= 2.5;
