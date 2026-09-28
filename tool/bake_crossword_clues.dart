@@ -19,6 +19,13 @@
 //            (half price, done within 24 h). Writes FILE.batch.json.
 //   collect  --cache FILE
 //            Checks the batch; when it's done, gates its answers into the cache.
+//   export   --out DIR (--all | --words-from ... | --words ...) [--chunk 250] [--cache FILE]
+//            For baking by hand in ChatGPT instead of the API: writes
+//            DIR/PROMPT.md and DIR/words-0001.json… (skipping words already
+//            in --cache). Paste the prompt, attach a file, save the .jsonl
+//            it returns next to it.
+//   import   --cache FILE DIR|FILE.jsonl...
+//            Gates ChatGPT's .jsonl replies and adds them to the cache.
 //   apply    --cache FILE --out FILE [--wordlist FILE] [--no-rejections]
 //            Writes a word list with the baked clues (and, unless told not
 //            to, the rejections) folded in.
@@ -63,6 +70,10 @@ Future<void> main(List<String> args) async {
       await _collect(opts);
     case 'apply':
       _apply(opts);
+    case 'export':
+      _export(opts);
+    case 'import':
+      _import(opts);
     default:
       stderr.writeln('unknown command ${args.first}');
       exit(64);
@@ -392,6 +403,94 @@ Future<String> _download(String key, String fileId) async {
   } finally {
     client.close();
   }
+}
+
+// ---------------------------------------------------------------------
+// ChatGPT hand-off
+// ---------------------------------------------------------------------
+
+void _export(_Opts o) {
+  final dir = Directory(o.required('--out'))..createSync(recursive: true);
+  final cache = o.value('--cache');
+  final entries = _wordlist(o);
+  final targets = _targets(o, entries, cache == null ? {} : _cached(cache));
+  final size = int.tryParse(o.value('--chunk') ?? '') ?? 250;
+  final chunks = _chunks(targets, size);
+  File('${dir.path}/PROMPT.md').writeAsStringSync('$chatGptPrompt\n');
+  for (var i = 0; i < chunks.length; i++) {
+    final name = 'words-${(i + 1).toString().padLeft(4, '0')}';
+    File('${dir.path}/$name.json').writeAsStringSync(
+      const JsonEncoder.withIndent(' ').convert([
+        for (final item in chunks[i])
+          {
+            'answer': item.answer,
+            if (item.toJson().containsKey('as_written')) 'as_written': item.display,
+            'senses': item.senses,
+            if (item.existing.isNotEmpty) 'old_clues_may_be_poor': item.existing,
+          },
+      ]),
+    );
+  }
+  stdout.writeln('${targets.length} words in ${chunks.length} files of up to $size → ${dir.path}');
+}
+
+void _import(_Opts o) {
+  final cache = o.required('--cache');
+  final entries = _wordlist(o);
+  final displays = <String, String>{};
+  for (final e in entries) {
+    displays.putIfAbsent(e.text, () => e.display);
+  }
+  final files = <File>[];
+  // Positional arguments: anything that isn't an option or an option's value.
+  final positional = [
+    for (var i = 0; i < o.args.length; i++)
+      if (!o.args[i].startsWith('--') && (i == 0 || !o.args[i - 1].startsWith('--'))) o.args[i],
+  ];
+  for (final arg in positional) {
+    final type = FileSystemEntity.typeSync(arg);
+    if (type == FileSystemEntityType.directory) {
+      files.addAll(Directory(arg).listSync().whereType<File>().where((f) => f.path.endsWith('.jsonl')));
+    } else if (type == FileSystemEntityType.file) {
+      files.add(File(arg));
+    }
+  }
+  files.sort((a, b) => a.path.compareTo(b.path));
+  final done = _cached(cache);
+  var added = 0;
+  var skipped = 0;
+  var unreadable = 0;
+  for (final file in files) {
+    for (final line in file.readAsLinesSync()) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty || !trimmed.startsWith('{')) continue;
+      try {
+        final row = jsonDecode(trimmed) as Map<String, dynamic>;
+        final answer = '${row['answer']}'.toUpperCase().replaceAll(RegExp('[^A-Z]'), '');
+        final display = displays[answer];
+        if (display == null || done.contains(answer)) {
+          skipped++;
+          continue;
+        }
+        final result = BakeResult(
+          answer,
+          row['verdict'] == 'reject' ? 'reject' : 'keep',
+          row['reason'] as String? ?? '',
+          [
+            for (final c in row['clues'] as List? ?? const [])
+              if (c is String) (text: c, style: '') else if (c is Map) (text: '${c['text']}', style: '${c['style'] ?? ''}'),
+          ],
+        );
+        _append(cache, [_gate(result, display, 'chatgpt')]);
+        done.add(answer);
+        added++;
+      } catch (_) {
+        unreadable++;
+      }
+    }
+  }
+  stdout.writeln('imported $added words from ${files.length} files '
+      '($skipped already done or not in the word list, $unreadable unreadable lines) into $cache');
 }
 
 // ---------------------------------------------------------------------

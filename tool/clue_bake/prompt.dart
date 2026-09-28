@@ -2,7 +2,9 @@
 
 import 'dart:convert';
 
-const bakeSystemPrompt = '''
+/// What a good clue is and which answers to reject — shared by the API
+/// path and the ChatGPT hand-off, so both write to the same brief.
+const bakeRules = '''
 You write clues for the daily crossword in a vocabulary app. Its solvers are fluent adult English readers who enjoy words; they are not crossword veterans. Write in the register of a New York Times Monday–Wednesday or Guardian Quick crossword: short, accurate, natural, a little lively.
 
 For EACH answer you are given, write 3 clues and give a verdict.
@@ -32,10 +34,25 @@ VERDICT — "keep" or "reject". Reject an answer that doesn't belong in a puzzle
 - a religious name or term best left out of a word game (ALLAH);
 - crude or offensive words;
 - an inflection nobody writes.
-Keep ordinary words, well-known names and places, and common phrases. Always write the clues, even for an answer you reject; give a short reason only when you reject.
+Keep ordinary words, well-known names and places, and common phrases. Always write the clues, even for an answer you reject; give a short reason only when you reject.''';
+
+/// The rules plus the reply format the API path parses.
+const bakeSystemPrompt = '''$bakeRules
 
 Return strict JSON only, one item per answer, using the ids given:
 {"answers": [{"id": 0, "verdict": "keep", "reason": "", "clues": [{"text": "...", "style": "synonym"}, {"text": "...", "style": "definition"}, {"text": "...", "style": "blank"}]}]}''';
+
+/// The same rules for a person pasting into ChatGPT with a word file
+/// attached. Replies are JSON Lines keyed by answer, which `import` reads.
+const chatGptPrompt = '''$bakeRules
+
+HOW TO WORK
+- The attached file is a JSON list of answers, each with the dictionary senses to go on (and sometimes old clues, which are often poor — don't copy them).
+- Write every clue yourself, answer by answer. Do not generate clues with code, templates or rules; a script can only package what you wrote.
+- Return a downloadable file named like the one attached but ending .jsonl, with exactly one line per answer, in the same order, in this form:
+{"answer": "ADO", "verdict": "keep", "reason": "", "clues": ["Fuss", "Much ___ about nothing", "Commotion"]}
+{"answer": "HRS", "verdict": "reject", "reason": "Abbreviation", "clues": ["Clock units", "Work week units", "Time sheet entries"]}
+- If you can't finish the whole file in one reply, stop at the end of a line, tell me the last answer you did, and continue from the next one when I say "continue". Never skip an answer.''';
 
 /// One word as the model sees it.
 class BakeItem {
