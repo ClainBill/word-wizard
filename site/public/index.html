@@ -1,0 +1,1414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Word Wizard — daily puzzles from the words you're learning</title>
+<meta name="description" content="Word Wizard turns the words you save into a daily crossword and Word Hunt, backed by a 740,000-entry offline English dictionary and spaced-repetition flashcards. Coming soon to iOS and Android.">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" href="/favicon-96.png" type="image/png" sizes="96x96">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#E9EAE0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14170F" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Word Wizard">
+<meta property="og:title" content="Word Wizard — daily puzzles from the words you're learning">
+<meta property="og:description" content="A daily crossword and Word Hunt built from your own vocabulary, with a 740,000-entry offline dictionary and spaced-repetition flashcards.">
+<meta property="og:url" content="https://wordwizard.wcgill.com/">
+<meta property="og:image" content="https://wordwizard.wcgill.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT,WONK@0,9..144,300..700,0..100,0..1;1,9..144,300..700,0..100,0..1&family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&family=Instrument+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --paper: #E9EAE0;
+    --surface: #F5F5EF;
+    --surface-2: #FBFBF7;
+    --ink: #1E2A22;
+    --ink-2: #5B665F;
+    --ink-3: #8A948C;
+    --rule: #C9CCBE;
+    --rule-2: #DDDFD3;
+    --ochre: #8A5A22;
+    --ochre-soft: rgba(138, 90, 34, 0.14);
+    --moss: #35604F;
+    --moss-soft: rgba(53, 96, 79, 0.14);
+    --list-a: rgba(211, 164, 92, 0.42);
+    --list-b: rgba(127, 187, 160, 0.42);
+    --again: #9A3B2E;
+    --hard: #A8681F;
+    --good: #35604F;
+    --easy: #2C6B73;
+    --shadow: 0 18px 50px rgba(30, 42, 34, 0.14), 0 2px 6px rgba(30, 42, 34, 0.08);
+    --xw-hl: #F1E4C9;
+    --display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    --body: "Newsreader", "Iowan Old Style", Georgia, "Times New Roman", serif;
+    --ui: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #14170F;
+      --surface: #1B1F17;
+      --surface-2: #22271D;
+      --ink: #EDEBDF;
+      --ink-2: #A6AA9A;
+      --ink-3: #737A6C;
+      --rule: #33382C;
+      --rule-2: #2A2F24;
+      --ochre: #D3A45C;
+      --ochre-soft: rgba(211, 164, 92, 0.16);
+      --moss: #7FBBA0;
+      --moss-soft: rgba(127, 187, 160, 0.16);
+      --list-a: rgba(211, 164, 92, 0.32);
+      --list-b: rgba(127, 187, 160, 0.32);
+      --again: #E08A7B;
+      --hard: #E0A85A;
+      --good: #7FBBA0;
+      --easy: #7CC3CC;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+      --xw-hl: #3F3622;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14170F;
+    --surface: #1B1F17;
+    --surface-2: #22271D;
+    --ink: #EDEBDF;
+    --ink-2: #A6AA9A;
+    --ink-3: #737A6C;
+    --rule: #33382C;
+    --rule-2: #2A2F24;
+    --ochre: #D3A45C;
+    --ochre-soft: rgba(211, 164, 92, 0.16);
+    --moss: #7FBBA0;
+    --moss-soft: rgba(127, 187, 160, 0.16);
+    --list-a: rgba(211, 164, 92, 0.32);
+    --list-b: rgba(127, 187, 160, 0.32);
+    --again: #E08A7B;
+    --hard: #E0A85A;
+    --good: #7FBBA0;
+    --easy: #7CC3CC;
+    --shadow: 0 18px 50px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+    --xw-hl: #3F3622;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 18px;
+    line-height: 1.5;
+    font-optical-sizing: auto;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--ochre); outline-offset: 3px; border-radius: 2px; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding-inline: clamp(16px, 4vw, 40px); }
+
+  /* ---------- masthead ---------- */
+  .mast {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding-block: 18px; border-bottom: 1px solid var(--rule);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+  .brand-mark { width: 36px; height: 36px; border-radius: 9px; flex: none; }
+  .brand-name { font-family: var(--display); font-weight: 500; font-size: 20px; letter-spacing: -0.01em; }
+  .mast nav { display: flex; gap: 22px; font-family: var(--ui); font-size: 13.5px; font-weight: 500; }
+  .mast nav a { text-decoration: none; color: var(--ink-2); }
+  .mast nav a:hover { color: var(--ink); }
+  @media (max-width: 640px) { .mast nav { display: none; } }
+
+  /* ---------- running head (dictionary guide words) ---------- */
+  .runhead {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: var(--ui); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-3); border-top: 1px solid var(--rule); padding-top: 10px; margin-top: 88px;
+  }
+  .runhead .guide { font-family: var(--display); text-transform: none; letter-spacing: 0; font-size: 15px; color: var(--ink-2); font-style: italic; }
+  .runhead .pg { font-variant-numeric: tabular-nums; }
+
+  /* ---------- hero ---------- */
+  .hero {
+    display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+    gap: clamp(32px, 6vw, 80px); align-items: center; padding-block: clamp(48px, 8vw, 96px) 24px;
+  }
+  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; } }
+
+  .entry-hw {
+    font-family: var(--display); font-variation-settings: "WONK" 1, "SOFT" 40, "opsz" 144;
+    font-weight: 500; font-size: clamp(56px, 9vw, 108px); line-height: 0.95; letter-spacing: -0.03em;
+    margin: 0 0 14px; text-wrap: balance;
+  }
+  .entry-hw .spark { color: var(--ochre); }
+  .entry-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 26px; color: var(--ink-2); }
+  .ipa { font-family: "Newsreader", "Charis SIL", "Doulos SIL", "Gentium", serif; font-size: 20px; }
+  .pos {
+    font-family: var(--ui); font-size: 11.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ochre); background: var(--ochre-soft); padding: 3px 8px; border-radius: 4px;
+  }
+  .tts { width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--rule); display: inline-grid; place-items: center; color: var(--ink-2); vertical-align: middle; }
+  .tts svg { width: 13px; height: 13px; fill: currentColor; }
+
+  .senses { margin: 0; padding: 0; list-style: none; max-width: 60ch; }
+  .senses li { display: grid; grid-template-columns: 2.2em 1fr; gap: 0 6px; font-size: clamp(19px, 2.2vw, 23px); line-height: 1.4; margin-bottom: 14px; }
+  .senses .n { font-family: var(--display); font-weight: 600; color: var(--ochre); font-variant-numeric: tabular-nums; text-align: right; padding-right: 6px; }
+  .senses em { font-style: italic; }
+  .senses .lbl { font-family: var(--ui); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-3); margin-right: 6px; }
+
+  .cta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 30px; font-family: var(--ui); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 999px; font-size: 14.5px; font-weight: 600;
+    text-decoration: none; border: 1px solid transparent; cursor: pointer; font-family: var(--ui);
+  }
+  .btn-primary { background: var(--ink); color: var(--paper); }
+  .btn-primary:hover { background: var(--ochre); color: #fff; }
+  .btn-ghost { border-color: var(--rule); color: var(--ink); background: transparent; }
+  .btn-ghost:hover { border-color: var(--ink); }
+  .cta-note { font-size: 13px; color: var(--ink-2); }
+
+  /* ---------- phone ---------- */
+  .phone {
+    width: min(360px, 100%); margin-inline: auto; background: var(--surface); border-radius: 36px; border: 1px solid var(--rule);
+    box-shadow: var(--shadow); padding: 12px; position: relative;
+  }
+  .screen { background: var(--paper); border-radius: 26px; overflow: hidden; display: flex; flex-direction: column; min-height: 660px; }
+  .screen-body { padding: 18px 18px 14px; flex: 1; font-size: 14px; line-height: 1.45; }
+  .status { display: flex; justify-content: space-between; font-family: var(--ui); font-size: 11px; font-weight: 600; padding: 12px 22px 0; color: var(--ink-2); }
+  .appbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 6px 4px 2px; font-family: var(--ui); font-size: 12px; color: var(--ink-2); }
+  .appbar .acts { display: flex; gap: 10px; }
+  .appbar .acts span { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--rule); display: inline-grid; place-items: center; }
+  .appbar .acts svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  .card { background: var(--surface); border: 1px solid var(--rule-2); border-radius: 12px; padding: 14px 15px; }
+  .card + .card { margin-top: 10px; }
+  .sec { font-family: var(--ui); font-size: 10.5px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px; }
+  .hw { font-family: var(--display); font-variation-settings: "WONK" 1, "SOFT" 30; font-size: 30px; font-weight: 500; letter-spacing: -0.02em; line-height: 1; margin: 0 0 6px; }
+  .m-senses { margin: 0; padding: 0; list-style: none; }
+  .m-senses li { display: grid; grid-template-columns: 1.4em 1fr; gap: 0 4px; margin-bottom: 6px; }
+  .m-senses .n { color: var(--ochre); font-weight: 600; font-family: var(--display); }
+  .tap { border-bottom: 1px dotted var(--ink-3); }
+  .ex { margin: 0; padding: 0; list-style: none; color: var(--ink-2); font-style: italic; }
+  .ex li { padding-left: 12px; text-indent: -12px; margin-bottom: 5px; }
+  .ex li::before { content: "“"; color: var(--ochre); font-style: normal; }
+  .more { font-family: var(--ui); font-size: 12px; font-weight: 500; color: var(--moss); font-style: normal; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-family: var(--ui); font-size: 11.5px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--rule); color: var(--ink-2); background: var(--surface-2); }
+  .note { font-size: 13px; color: var(--ink-2); }
+  .note code { font-family: var(--ui); font-size: 12px; background: var(--paper); padding: 1px 5px; border-radius: 4px; }
+  .tabbar { display: grid; grid-template-columns: repeat(6, 1fr); background: var(--surface); border-top: 1px solid var(--rule-2); padding: 8px 4px 10px; font-family: var(--ui); font-size: 9.5px; font-weight: 500; text-align: center; color: var(--ink-3); }
+  .tabbar div { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .tabbar svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .tabbar .on { color: var(--ink); }
+  .tabbar .on svg { background: var(--ochre-soft); border-radius: 10px; padding: 3px 10px; width: 40px; box-sizing: content-box; }
+  .tabbar .badge { position: relative; }
+  .tabbar .badge b { position: absolute; top: -4px; right: -8px; background: var(--ochre); color: #fff; font-size: 8px; padding: 1px 4px; border-radius: 6px; font-weight: 600; }
+
+  /* ---------- feature sections ---------- */
+  .feature { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(28px, 5vw, 72px); align-items: center; padding-block: clamp(40px, 6vw, 72px); }
+  .feature.flip .fig { order: -1; }
+  @media (max-width: 860px) { .feature { grid-template-columns: 1fr; } .feature.flip .fig { order: 0; } }
+  .feature h2 {
+    font-family: var(--display); font-variation-settings: "WONK" 1, "SOFT" 30, "opsz" 72; font-weight: 500;
+    font-size: clamp(34px, 4.4vw, 48px); line-height: 1.05; letter-spacing: -0.02em; margin: 0 0 8px; text-wrap: balance;
+  }
+  .feature h2 .fpos { font-family: var(--ui); font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ochre); vertical-align: middle; margin-left: 10px; letter-spacing: 0.1em; }
+  .feature .ipa { display: block; margin-bottom: 18px; font-size: 17px; color: var(--ink-2); }
+  .feature p { max-width: 58ch; margin: 0 0 14px; font-size: 18.5px; }
+  .feature p strong { font-weight: 600; }
+  .feature ul.facts { margin: 18px 0 0; padding: 0; list-style: none; max-width: 58ch; }
+  .feature ul.facts li { display: grid; grid-template-columns: 2em 1fr; gap: 6px; font-size: 16.5px; padding: 8px 0; border-top: 1px solid var(--rule-2); color: var(--ink-2); }
+  .feature ul.facts li .n { font-family: var(--display); color: var(--ochre); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .feature ul.facts li b { color: var(--ink); font-weight: 600; }
+  .fig { min-width: 0; }
+  .mock { background: var(--surface); border: 1px solid var(--rule); border-radius: 18px; padding: 18px; box-shadow: var(--shadow); font-size: 14px; }
+  .mock .appbar { padding-top: 0; }
+  .mock-title { font-family: var(--ui); font-weight: 600; font-size: 13px; color: var(--ink); }
+  .caption, .feature p.caption { font-family: var(--ui); font-size: 12.5px; color: var(--ink-3); margin: 12px 4px 0; line-height: 1.45; max-width: none; }
+  .feature p.sec { font-size: 10.5px; margin: 0 0 8px; max-width: none; }
+  .feature p.pin-cap { font-size: 10.5px; margin: 6px 0 0; }
+
+  /* search mock */
+  .searchbox { display: flex; align-items: center; gap: 10px; border: 1px solid var(--rule); background: var(--surface-2); border-radius: 12px; padding: 10px 12px; font-family: var(--ui); font-size: 15px; }
+  .searchbox svg { width: 16px; height: 16px; fill: none; stroke: var(--ink-3); stroke-width: 2; stroke-linecap: round; }
+  .searchbox .q { flex: 1; }
+  .searchbox .q i { font-style: normal; display: inline-block; width: 1px; height: 1.1em; background: var(--ochre); vertical-align: -2px; margin-left: 1px; animation: blink 1.1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .results { list-style: none; margin: 8px 0 0; padding: 0; }
+  .results li { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 9px 4px; border-top: 1px solid var(--rule-2); align-items: baseline; }
+  .results .w { font-family: var(--display); font-size: 17px; font-weight: 500; }
+  .results .w mark { background: var(--ochre-soft); color: inherit; border-radius: 2px; }
+  .results .g { color: var(--ink-2); font-size: 13.5px; display: block; }
+  .results .rk { font-family: var(--ui); font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .results .lem { font-family: var(--ui); font-size: 11px; color: var(--moss); }
+
+  /* reader mock */
+  .legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .legend span { font-family: var(--ui); font-size: 11px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--rule); background: var(--surface-2); }
+  .legend .la { background: var(--list-a); border-color: transparent; }
+  .legend .lb { background: var(--list-b); border-color: transparent; }
+  .page { background: var(--surface-2); border: 1px solid var(--rule-2); padding: 18px 20px; font-size: 16px; line-height: 1.6; border-radius: 6px; }
+  .page h4 { font-family: var(--display); font-weight: 500; font-size: 18px; margin: 0 0 8px; }
+  .page p { margin: 0 0 10px; }
+  .hl-a { background: var(--list-a); border-radius: 2px; padding: 0 2px; }
+  .hl-b { background: var(--list-b); border-radius: 2px; padding: 0 2px; }
+  .st { text-decoration: underline; text-decoration-color: var(--moss); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+  .un { text-decoration: underline dotted; text-decoration-color: var(--ink-3); text-underline-offset: 3px; }
+  .peek { margin-top: 12px; background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 12px 14px; box-shadow: 0 -6px 20px rgba(30,42,34,0.06); }
+  .peek .hw { font-size: 22px; }
+  .peek .row { display: flex; gap: 8px; margin-top: 8px; }
+  .peek .row span { font-family: var(--ui); font-size: 11.5px; font-weight: 600; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--rule); color: var(--moss); }
+
+  /* lists mock */
+  .listgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .lcard { background: var(--surface-2); border: 1px solid var(--rule-2); border-radius: 12px; padding: 12px; position: relative; }
+  .lcard .sw { width: 14px; height: 14px; border-radius: 4px; margin-bottom: 8px; }
+  .lcard .name { font-family: var(--display); font-weight: 500; font-size: 16px; line-height: 1.15; }
+  .lcard .cnt { font-family: var(--ui); font-size: 11.5px; color: var(--ink-2); margin-top: 6px; }
+  .lcard .cnt b { color: var(--ochre); font-weight: 600; }
+  .lcard.folder { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; }
+  .lcard.folder .sw { margin: 0; width: 22px; height: 18px; border-radius: 3px 6px 4px 4px; }
+  .lcard.folder .sub { font-family: var(--ui); font-size: 11.5px; color: var(--ink-2); }
+  .play { font-family: var(--ui); font-size: 11.5px; font-weight: 600; color: var(--paper); background: var(--ink); padding: 6px 10px; border-radius: 999px; white-space: nowrap; }
+
+  /* study demo */
+  .study { display: grid; gap: 12px; }
+  .deck { perspective: 1200px; }
+  .sc { position: relative; min-height: 190px; transform-style: preserve-3d; transition: transform .55s cubic-bezier(.4,.1,.2,1); cursor: pointer; border-radius: 14px; }
+  .sc:focus-visible { outline: 2px solid var(--ochre); outline-offset: 3px; }
+  .sc.revealed { transform: rotateY(180deg); cursor: default; }
+  .sc .face { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; background: var(--surface-2); border: 1px solid var(--rule-2); border-radius: 14px; padding: 20px; text-align: center; display: flex; flex-direction: column; justify-content: center; }
+  .sc .face.back { transform: rotateY(180deg); }
+  .sc .stage { font-family: var(--ui); font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+  .sc .stage b { color: var(--moss); }
+  .sc .word { font-family: var(--display); font-variation-settings: "WONK" 1, "SOFT" 30; font-size: 34px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.05; }
+  .sc .back .word { font-size: 22px; }
+  .sc .def { color: var(--ink-2); font-size: 15.5px; margin-top: 8px; line-height: 1.45; }
+  .sc .def em { color: var(--ink); }
+  .sc .hint { font-family: var(--ui); font-size: 12px; color: var(--ink-3); margin-top: 14px; }
+  .sc .hint::before { content: "↻ "; }
+  @keyframes card-out { to { opacity: 0; transform: translateX(-28px) scale(.98); } }
+  @keyframes card-in { from { opacity: 0; transform: translateX(28px) scale(.98); } }
+  .deck.out .sc { animation: card-out .22s ease-in both; }
+  .deck.in .sc { animation: card-in .3s cubic-bezier(.2,.7,.2,1) both; }
+  .grades button:disabled { opacity: .45; cursor: default; }
+  .grades button:disabled:hover { border-color: var(--rule); }
+  .grades { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .grades button { font-family: var(--ui); background: var(--surface-2); border: 1px solid var(--rule); border-radius: 12px; padding: 10px 6px; cursor: pointer; color: var(--ink); display: grid; gap: 2px; }
+  .grades button:hover { border-color: var(--ink-2); }
+  .grades button b { font-size: 13px; font-weight: 600; }
+  .grades button span { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .grades button[data-g="again"] b { color: var(--again); }
+  .grades button[data-g="hard"] b { color: var(--hard); }
+  .grades button[data-g="good"] b { color: var(--good); }
+  .grades button[data-g="easy"] b { color: var(--easy); }
+  .srs-state { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-family: var(--ui); }
+  .srs-state div { background: var(--surface-2); border: 1px solid var(--rule-2); border-radius: 10px; padding: 8px 10px; }
+  .srs-state small { display: block; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+  .srs-state b { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; font-family: var(--display); }
+  .timeline { position: relative; height: 54px; margin: 4px 6px 0; }
+  .timeline .axis { position: absolute; left: 0; right: 0; top: 22px; height: 1px; background: var(--rule); }
+  .timeline .t { position: absolute; top: 14px; width: 1px; height: 17px; background: var(--ink-3); transform: translateX(-50%); }
+  .timeline .t::after { content: attr(data-l); position: absolute; top: 20px; left: 50%; transform: translateX(-50%); font-family: var(--ui); font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
+  .timeline .t.now { background: var(--ochre); width: 2px; }
+  .timeline .t.now::after { color: var(--ochre); font-weight: 600; }
+  .timeline .t.due { background: var(--moss); width: 2px; }
+  .timeline .t.due::after { color: var(--moss); font-weight: 600; }
+  .timeline .cap { position: absolute; right: 0; top: -2px; font-family: var(--ui); font-size: 10.5px; color: var(--ink-3); }
+  .log { font-family: var(--ui); font-size: 12px; color: var(--ink-2); min-height: 18px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .log span { padding: 2px 8px; border-radius: 999px; background: var(--paper); border: 1px solid var(--rule-2); }
+  .demo-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-family: var(--ui); font-size: 12px; color: var(--ink-3); }
+  .demo-foot button { font-family: var(--ui); font-size: 12px; background: none; border: 1px solid var(--rule); color: var(--ink-2); border-radius: 999px; padding: 5px 10px; cursor: pointer; }
+
+  /* games mock */
+  .games { display: grid; gap: 12px; }
+  .game { background: var(--surface-2); border: 1px solid var(--rule-2); border-radius: 12px; padding: 14px; }
+  .game .gt { font-family: var(--ui); font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ochre); margin-bottom: 8px; }
+  .tiles { display: flex; gap: 5px; }
+  .tile { width: 34px; height: 40px; border: 1.5px solid var(--rule); border-radius: 6px; display: grid; place-items: center; font-family: var(--display); font-size: 20px; font-weight: 600; text-transform: uppercase; }
+  .tile.on { background: var(--ochre-soft); border-color: var(--ochre); }
+  .gap { display: inline-block; min-width: 88px; border-bottom: 2px solid var(--ochre); margin: 0 3px; vertical-align: -2px; height: 1.1em; }
+  .cue { display: flex; flex-wrap: wrap; gap: 8px; font-size: 14px; color: var(--ink-2); }
+  .cue span { background: var(--paper); border-radius: 8px; padding: 6px 10px; }
+  .cue b { color: var(--ink); font-weight: 600; }
+
+  /* crossword */
+  .xw { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; background: var(--ink); padding: 3px; border-radius: 6px; width: min(300px, 100%); aspect-ratio: 1; margin-inline: auto; }
+  .xw div { background: var(--surface-2); position: relative; display: grid; place-items: center; font-family: var(--ui); font-weight: 600; font-size: clamp(16px, 4.5vw, 24px); text-transform: uppercase; color: var(--ink); }
+  .xw div::before { content: attr(data-n); position: absolute; top: 2px; left: 4px; font-size: 9px; font-weight: 500; color: var(--ink-3); }
+  .xw div.w { background: var(--xw-hl); }
+  .xw div.b { background: var(--ink); cursor: default; }
+  .xw div.c { background: var(--ochre); color: #fff; }
+  .xw div.c::before { color: #fff; }
+  .clues { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; font-size: 14px; margin-top: 14px; }
+  .clues h5 { font-family: var(--ui); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 6px; }
+  .clues ol { margin: 0; padding: 0; list-style: none; }
+  .clues li { display: grid; grid-template-columns: 1.4em 1fr; gap: 4px; margin-bottom: 4px; color: var(--ink-2); }
+  .clues li b { font-family: var(--ui); font-size: 12px; color: var(--ink-3); font-weight: 500; }
+  .clues li.hot { color: var(--ink); }
+  .clues li .sp { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--moss); margin-left: 5px; vertical-align: 1px; }
+  .xw-chip { font-family: var(--ui); font-size: 11.5px; font-weight: 600; color: var(--moss); background: var(--moss-soft); padding: 4px 9px; border-radius: 999px; }
+  .diff { display: flex; gap: 6px; }
+  .diff span { font-family: var(--ui); font-size: 11.5px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--rule); color: var(--ink-2); }
+  .diff span.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+  /* sense pin (hero mock) */
+  .pin { display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; background: var(--moss); color: #fff; font-size: 9px; font-weight: 700; margin-left: 5px; vertical-align: 1px; font-family: var(--ui); }
+  .pin-cap { font-family: var(--ui); font-size: 10.5px; color: var(--ink-3); margin: 6px 0 0; }
+
+  /* sentence-choice + rebuild games */
+  .opts { display: grid; gap: 6px; }
+  .opt { border: 1px solid var(--rule-2); border-radius: 8px; padding: 7px 10px; font-size: 13.5px; color: var(--ink-2); line-height: 1.4; }
+  .opt.pick { border-color: var(--moss); background: var(--moss-soft); color: var(--ink); }
+  .opt .gap { min-width: 52px; height: 1em; }
+  .rebuild { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rebuild span { font-family: var(--ui); font-size: 12.5px; padding: 5px 9px; border-radius: 8px; border: 1px solid var(--rule); background: var(--paper); }
+  .rebuild span.placed { background: var(--ochre-soft); border-color: var(--ochre); color: var(--ink); }
+  .rebuild .slot { border-style: dashed; color: var(--ink-3); min-width: 46px; }
+  .beats { display: inline-flex; gap: 5px; align-items: center; vertical-align: middle; margin-right: 4px; }
+  .beats i { width: 8px; height: 8px; border-radius: 50%; background: var(--ochre); display: inline-block; }
+  .beats i:nth-child(2) { opacity: 0.45; }
+  .games .side { font-family: var(--ui); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); display: flex; align-items: center; gap: 10px; }
+  .games .side::after { content: ""; flex: 1; height: 1px; background: var(--rule-2); }
+
+  /* word hunt */
+  .hunt { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; width: min(260px, 100%); aspect-ratio: 1; margin-inline: auto; position: relative; }
+  .hunt div { background: var(--surface-2); border: 1px solid var(--rule); border-radius: 10px; display: grid; place-items: center; font-family: var(--display); font-weight: 600; font-size: clamp(20px, 5vw, 28px); text-transform: uppercase; color: var(--ink); }
+  .hunt div.tr { background: var(--ochre); border-color: var(--ochre); color: #fff; }
+  .hunt div.th { box-shadow: inset 0 0 0 2px var(--moss); }
+  .hunt-def { margin-top: 12px; background: var(--surface-2); border: 1px solid var(--rule-2); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; }
+  .hunt-def b { font-family: var(--display); font-size: 17px; font-weight: 500; margin-right: 6px; }
+  .hunt-def .tag { font-family: var(--ui); font-size: 10.5px; color: var(--moss); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+  .found { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+  .found span { font-family: var(--ui); font-size: 11.5px; padding: 3px 8px; border-radius: 999px; background: var(--paper); border: 1px solid var(--rule-2); text-transform: uppercase; letter-spacing: 0.04em; }
+  .found span.th { border-color: var(--moss); color: var(--moss); }
+  .found span.bn { border-style: dashed; color: var(--ink-3); }
+  .hunt-stats { display: flex; justify-content: space-between; font-family: var(--ui); font-size: 12px; color: var(--ink-2); margin-top: 12px; font-variant-numeric: tabular-nums; }
+  .hunt-stats b { color: var(--ink); font-weight: 600; }
+
+  /* progress mock */
+  .pbar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--rule-2); margin: 4px 0 6px; }
+  .pbar i { display: block; height: 100%; }
+  .pkey { display: flex; flex-wrap: wrap; gap: 4px 14px; font-family: var(--ui); font-size: 11px; color: var(--ink-2); }
+  .pkey i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+  .headline { font-family: var(--display); font-variation-settings: "WONK" 1, "SOFT" 30; font-size: 44px; font-weight: 500; letter-spacing: -0.02em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .headline small { font-family: var(--ui); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-left: 8px; }
+  .units { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+  .units div { background: var(--surface-2); border: 1px solid var(--rule-2); border-radius: 10px; padding: 8px 10px; font-family: var(--ui); }
+  .units small { display: block; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+  .units b { font-family: var(--display); font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .heat { display: grid; grid-template-columns: repeat(12, 13px); grid-auto-rows: 13px; gap: 3px; margin-top: 6px; }
+  .heat i { display: block; aspect-ratio: 1; border-radius: 2px; background: var(--rule-2); }
+  .heat i.l1 { background: rgba(53, 96, 79, 0.28); } .heat i.l2 { background: rgba(53, 96, 79, 0.55); } .heat i.l3 { background: var(--moss); }
+  .ptable { width: 100%; border-collapse: collapse; font-family: var(--ui); font-size: 12px; margin-top: 6px; }
+  .ptable th { text-align: left; font-weight: 500; color: var(--ink-3); padding: 4px 0; border-bottom: 1px solid var(--rule-2); }
+  .ptable td { padding: 5px 0; border-bottom: 1px solid var(--rule-2); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .ptable td:first-child { color: var(--ink); }
+  .ptable th:not(:first-child), .ptable td:not(:first-child) { text-align: right; }
+
+  /* ---------- specs ---------- */
+  .specs { border-top: 1px solid var(--rule); margin-top: 40px; padding-block: 56px 20px; }
+  .specs h2 { font-family: var(--display); font-variation-settings: "WONK" 1, "SOFT" 30, "opsz" 72; font-weight: 500; font-size: clamp(30px, 4vw, 42px); letter-spacing: -0.02em; margin: 0 0 28px; }
+  .spec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 32px; }
+  .spec { display: grid; grid-template-columns: 1fr; padding: 14px 0; border-top: 1px solid var(--rule-2); }
+  .spec dt { font-family: var(--ui); font-size: 11.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; }
+  .spec dd { margin: 0; font-size: 17px; }
+  .spec dd b { font-family: var(--display); font-size: 24px; font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; margin-right: 6px; }
+
+  /* ---------- footer ---------- */
+  footer { border-top: 1px solid var(--rule); margin-top: 40px; padding-block: 28px 48px; font-family: var(--ui); font-size: 13px; color: var(--ink-2); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 14px 30px; }
+  footer p { margin: 0; max-width: 62ch; line-height: 1.55; }
+  footer a { color: var(--ink-2); }
+
+  /* ---------- motion ---------- */
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes twinkle { 0%, 82%, 100% { opacity: 1; transform: scale(1); } 90% { opacity: 0.35; transform: scale(0.7); } }
+  @keyframes pop { from { opacity: 0; transform: translateX(-50%) scaleY(0.4); } to { opacity: 1; transform: translateX(-50%) scaleY(1); } }
+  @keyframes fadeup { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes tile-lit { 0%, 6% { background: var(--surface-2); color: var(--ink); border-color: var(--rule); } 8%, 78% { background: var(--ochre); color: #fff; border-color: var(--ochre); } 86%, 100% { background: var(--surface-2); color: var(--ink); border-color: var(--rule); } }
+  @keyframes trace-line { 0% { stroke-dashoffset: 1; opacity: 1; } 30%, 78% { stroke-dashoffset: 0; opacity: 1; } 86%, 100% { stroke-dashoffset: 0; opacity: 0; } }
+  @keyframes def-in { 0%, 28% { opacity: 0; transform: translateY(6px); } 34%, 80% { opacity: 1; transform: none; } 88%, 100% { opacity: 0; transform: translateY(6px); } }
+  @keyframes caret { 50% { opacity: 0; } }
+
+  .hero > div:first-child > * { animation: rise 0.7s cubic-bezier(.2,.7,.2,1) both; }
+  .hero > div:first-child > :nth-child(2) { animation-delay: .08s; }
+  .hero > div:first-child > :nth-child(3) { animation-delay: .16s; }
+  .hero > div:first-child > :nth-child(4) { animation-delay: .26s; }
+  .hero .fig { animation: rise 0.9s cubic-bezier(.2,.7,.2,1) .2s both; }
+  .mast nav a { position: relative; }
+  .mast nav a::after { content: ""; position: absolute; left: 0; right: 100%; bottom: -4px; height: 1px; background: var(--ochre); transition: right .25s ease; }
+  .mast nav a:hover::after { right: 0; }
+
+  .results { min-height: 336px; }
+  .results li.in { animation: fadeup .25s ease both; }
+  #scap { min-height: 2.9em; }
+  .results .empty { color: var(--ink-3); font-family: var(--ui); font-size: 13px; padding: 12px 4px; }
+  .searchbox .q .sp { display: inline-block; width: 0.35em; border-bottom: 1px solid var(--ink-3); height: 0.9em; vertical-align: -3px; margin-left: 1px; }
+
+  .page .rw { cursor: pointer; transition: background .2s; }
+  .page .rw:hover { outline: 1px solid var(--ochre); outline-offset: 1px; border-radius: 2px; }
+  .page .rw.cur { box-shadow: 0 0 0 2px var(--ochre); border-radius: 2px; }
+  .peek.swap { animation: fadeup .3s ease; }
+
+  .timeline .t { animation: pop .35s ease both; }
+  .grades button { transition: transform .15s ease, border-color .15s ease; }
+  .grades button:active { transform: scale(0.96); }
+
+  .tile { cursor: pointer; transition: background .2s, border-color .2s, transform .2s; }
+  .tile.on { animation: fadeup .3s ease; }
+  .tile:hover:not(.on) { border-color: var(--ink-3); }
+  .opt { cursor: pointer; transition: border-color .2s, background .2s; }
+  .opt:hover { border-color: var(--ink-3); }
+  .opt.wrong { border-color: var(--again); background: rgba(154, 59, 46, 0.08); }
+
+  .xw { cursor: text; }
+  .xw:focus-visible { outline: 2px solid var(--ochre); outline-offset: 4px; }
+  .xw div { transition: background .15s; cursor: pointer; }
+  .xw div.c::after { content: ""; position: absolute; bottom: 14%; left: 30%; width: 40%; height: 2px; background: #fff; animation: caret 1s steps(2) infinite; }
+  .xw div.c:not(:empty)::after { display: none; }
+
+  .hunt-wrap { position: relative; width: min(260px, 100%); margin-inline: auto; }
+  .hunt-wrap .hunt { width: 100%; }
+  .hunt svg.trace { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  .hunt svg.trace polyline { fill: none; stroke: var(--ochre); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 0; opacity: .85; transition: opacity .5s ease; }
+  .hunt div.tr { background: var(--surface-2); border-color: var(--rule); color: var(--ink); transition: background .25s, border-color .25s, color .25s; }
+  .hunt div.tr.lit { background: var(--ochre); border-color: var(--ochre); color: #fff; }
+  .hunt-def.anim { transition: opacity .4s ease, transform .4s ease; }
+  .hunt-def.anim.hide { opacity: 0; transform: translateY(6px); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .searchbox .q i, .xw div.c::after { animation: none; }
+    .hero > div:first-child > *, .hero .fig, .results li, .peek.swap, .deck.out .sc, .deck.in .sc, .timeline .t, .tile.on { animation: none; }
+    .hunt svg.trace polyline { transition: none; }
+    * { transition: none !important; }
+  }
+
+  /* ---------- brand mark (the app icon) ---------- */
+  img.brand-mark { display: block; box-shadow: 0 1px 3px rgba(30, 42, 34, 0.25); }
+  .soon {
+    display: inline-flex; align-items: center; gap: 8px; font-family: var(--ui); font-size: 12px; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--moss); background: var(--moss-soft);
+    padding: 5px 11px; border-radius: 999px; margin-bottom: 22px;
+  }
+  .soon::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--moss); }
+  .fpos.prem { color: var(--moss); }
+
+  /* ---------- hero phone: the Games tab ---------- */
+  .gt-title { font-family: var(--display); font-variation-settings: "SOFT" 30; font-size: 24px; font-weight: 500; margin: 2px 0 12px; }
+  .lb-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--ui); font-size: 12px; font-weight: 600; background: var(--surface); border: 1px solid var(--rule-2); border-radius: 999px; padding: 5px 10px 5px 9px; }
+  .lb-pill svg { width: 14px; height: 14px; fill: none; stroke: var(--ochre); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .lb-pill span { color: var(--ink-2); font-weight: 400; }
+  .gt-h { font-family: var(--display); font-size: 17px; font-weight: 500; margin: 16px 0 2px; }
+  .gt-sub { font-family: var(--ui); font-size: 11px; color: var(--ink-2); line-height: 1.4; margin: 0 0 8px; }
+  .gtile { display: grid; grid-template-columns: 40px 1fr auto; gap: 11px; align-items: center; background: var(--surface); border: 1px solid var(--rule-2); border-radius: 12px; padding: 9px 11px; }
+  .gtile + .gtile { margin-top: 7px; }
+  .gtile .t1 { font-family: var(--ui); font-size: 13px; font-weight: 600; }
+  .gtile .t2 { font-family: var(--ui); font-size: 11px; color: var(--ink-2); }
+  .gtile .chev { color: var(--ink-3); font-family: var(--ui); }
+  .gtile .done { font-family: var(--ui); font-size: 10.5px; font-weight: 600; color: var(--moss); background: var(--moss-soft); padding: 3px 7px; border-radius: 999px; }
+  .thumb { width: 40px; height: 40px; display: grid; gap: 1px; background: var(--ink-3); padding: 1px; border-radius: 4px; overflow: hidden; }
+  .thumb i { background: var(--surface-2); display: block; }
+  .thumb i.b { background: var(--ink-3); }
+  .thumb i.f { background: var(--xw-hl); }
+  .thumb.t5 { grid-template-columns: repeat(5, 1fr); grid-template-rows: repeat(5, 1fr); }
+  .thumb.t9 { grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(9, 1fr); gap: 0.5px; padding: 0.5px; }
+  .thumb.t17 { grid-template-columns: repeat(17, 1fr); grid-template-rows: repeat(17, 1fr); gap: 0; padding: 0; }
+  .thumb.hunt4 { grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(4, 1fr); gap: 1.5px; background: none; padding: 0; }
+  .thumb.hunt4 i { border-radius: 2px; border: 1px solid var(--rule); font-style: normal; font-family: var(--display); font-weight: 600; font-size: 7px; line-height: 1; min-height: 0; display: grid; place-items: center; text-transform: uppercase; }
+  .thumb.hunt4 i.tr { background: var(--ochre); border-color: var(--ochre); color: #fff; }
+  .gicon { width: 40px; height: 40px; border-radius: 50%; background: var(--moss-soft); display: grid; place-items: center; }
+  .gicon svg { width: 20px; height: 20px; fill: none; stroke: var(--moss); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ---------- group mock ---------- */
+  .gp-today { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; background: var(--surface-2); border: 1px solid var(--rule-2); border-radius: 12px; padding: 12px 14px; }
+  .gp-today .t1 { font-family: var(--display); font-size: 17px; font-weight: 500; }
+  .gp-today .t2 { font-family: var(--ui); font-size: 11.5px; color: var(--ink-2); }
+  .board { width: 100%; border-collapse: collapse; font-family: var(--ui); font-size: 13px; margin-top: 6px; }
+  .board td { padding: 8px 4px; border-bottom: 1px solid var(--rule-2); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .board td:first-child { width: 1.6em; color: var(--ink-3); }
+  .board td.nm { color: var(--ink); font-weight: 500; }
+  .board td:not(.nm):not(:first-child) { text-align: right; }
+  .board tr.me td { background: var(--ochre-soft); }
+  .board tr.me td:first-child { border-radius: 6px 0 0 6px; } .board tr.me td:last-child { border-radius: 0 6px 6px 0; }
+  .share-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rule-2); }
+  .share-row .t1 { font-family: var(--ui); font-size: 13px; font-weight: 600; }
+  .share-row .t2 { font-family: var(--ui); font-size: 11.5px; color: var(--ink-2); line-height: 1.4; }
+  .switch { width: 36px; height: 20px; border-radius: 999px; background: var(--moss); position: relative; }
+  .switch::after { content: ""; position: absolute; top: 3px; right: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+  .code { font-family: var(--ui); font-size: 12px; color: var(--ink-2); margin-top: 12px; display: flex; justify-content: space-between; align-items: center; }
+  .code b { font-family: var(--ui); letter-spacing: 0.18em; font-weight: 600; color: var(--ink); background: var(--paper); border: 1px dashed var(--rule); padding: 4px 8px; border-radius: 6px; }
+
+  /* ---------- free vs premium ---------- */
+  .plans { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 8px; }
+  @media (max-width: 760px) { .plans { grid-template-columns: 1fr; } }
+  .plan { background: var(--surface); border: 1px solid var(--rule); border-radius: 18px; padding: 22px 24px; }
+  .plan.prem { border-color: var(--ochre); box-shadow: var(--shadow); }
+  .plan h3 { font-family: var(--display); font-variation-settings: "WONK" 1, "SOFT" 30; font-weight: 500; font-size: 28px; margin: 0; letter-spacing: -0.01em; }
+  .plan .for { font-family: var(--ui); font-size: 12.5px; color: var(--ink-2); margin: 2px 0 14px; }
+  .plan ul { list-style: none; margin: 0; padding: 0; }
+  .plan li { display: grid; grid-template-columns: 1.4em 1fr; gap: 4px; padding: 8px 0; border-top: 1px solid var(--rule-2); font-size: 16.5px; line-height: 1.4; }
+  .plan li::before { content: "✓"; color: var(--moss); font-family: var(--ui); font-weight: 600; }
+  .plan li.ad::before { content: "·"; color: var(--ink-3); }
+  .plan li.ad { color: var(--ink-2); }
+  .plan.prem li::before { color: var(--ochre); }
+  .plans-note { font-family: var(--ui); font-size: 13.5px; color: var(--ink-2); max-width: 70ch; margin: 22px 0 0; line-height: 1.55; }
+  .premium-head { max-width: 62ch; }
+  .premium-head p { font-size: 18.5px; margin: 0 0 22px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="mast">
+    <a class="brand" href="#top" id="top">
+      <img class="brand-mark" src="/logo.png" width="36" height="36" alt="">
+      <span class="brand-name">Word Wizard</span>
+    </a>
+    <nav aria-label="Sections">
+      <a href="#games">Games</a>
+      <a href="#groups">Groups</a>
+      <a href="#dictionary">Dictionary</a>
+      <a href="#reader">Reader</a>
+      <a href="#study">Study</a>
+      <a href="#progress">Progress</a>
+      <a href="#premium">Premium</a>
+    </nav>
+  </header>
+
+  <!-- ============ HERO ============ -->
+  <section class="hero" aria-labelledby="hero-hw">
+    <div>
+      <span class="soon">Coming soon to iOS &amp; Android</span>
+      <h1 class="entry-hw" id="hero-hw">Word Wizard<span class="spark">.</span></h1>
+      <div class="entry-meta">
+        <span class="ipa">/wɜːd ˈwɪzəd/</span>
+        <span class="pos">noun</span>
+        <span class="tts" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg></span>
+      </div>
+      <ol class="senses">
+        <li><span class="n">1</span><span>A daily crossword and Word Hunt built from <em>the words you’re learning</em> — your own vocabulary, played back to you as puzzles.</span></li>
+        <li><span class="n">2</span><span>An English dictionary of <em>740,000 entries</em> that works offline, for fluent readers who want the rare ones.</span></li>
+        <li><span class="n">3</span><span><span class="lbl">by extension</span>A spaced-repetition trainer that brings back every word you keep on the day you were about to forget it.</span></li>
+      </ol>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#games">Play a crossword<span aria-hidden="true">↓</span></a>
+        <a class="btn btn-ghost" href="#premium">Free &amp; Premium</a>
+        <span class="cta-note">Free to download. No account needed to start.</span>
+      </div>
+    </div>
+
+    <div class="fig">
+      <div class="phone" aria-label="The Games tab: three daily crosswords, a Word Hunt board and group puzzles">
+        <div class="screen">
+          <div class="status"><span>9:41</span><span>◐ ▂▄▆</span></div>
+          <div class="screen-body">
+            <p class="gt-title">Games</p>
+            <span class="lb-pill"><svg viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M9 20h6M10 17h4"/></svg>Leaderboard <span>· #14 this week ›</span></span>
+
+            <p class="gt-h">Daily Crossword</p>
+            <p class="gt-sub">A grid of dictionary words with a few of today’s study words mixed in.</p>
+            <div class="gtile"><div class="thumb t5"><i class="b"></i><i></i><i></i><i></i><i class="b"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i class="b"></i></div><div><div class="t1">Mini</div><div class="t2">5×5</div></div><span class="done">Solved</span></div>
+            <div class="gtile"><div class="thumb t9"><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i class="b"></i><i class="b"></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i class="b"></i><i class="b"></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i></div><div><div class="t1">Midi</div><div class="t2">9×9</div></div><span class="chev">›</span></div>
+            <div class="gtile"><div class="thumb t17"><i></i><i class="b"></i><i></i><i class="b"></i><i></i><i></i><i class="b"></i><i></i><i class="b"></i><i></i><i class="b"></i><i class="b"></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i class="b"></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i class="b"></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i class="b"></i><i class="b"></i><i></i><i class="b"></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i class="b"></i><i class="b"></i><i></i><i></i><i></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i></i><i class="b"></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i class="b"></i><i></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i></i><i></i><i></i><i class="b"></i><i class="b"></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i class="b"></i><i></i><i class="b"></i><i class="b"></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i class="b"></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i class="b"></i><i></i><i></i><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="b"></i><i></i><i></i><i class="b"></i><i class="b"></i><i></i><i class="b"></i><i></i><i class="b"></i><i></i><i></i><i class="b"></i><i></i><i class="b"></i><i></i></div><div><div class="t1">Mega</div><div class="t2">17×17</div></div><span class="chev">›</span></div>
+
+            <p class="gt-h">Word Hunt</p>
+            <p class="gt-sub">Trace words through a 4×4 board built around your study words and a daily theme.</p>
+            <div class="gtile"><div class="thumb hunt4"><i>h</i><i>e</i><i class="tr">l</i><i class="tr">a</i><i class="tr">t</i><i class="tr">n</i><i class="tr">b</i><i class="tr">m</i><i>r</i><i>i</i><i class="tr">e</i><i>s</i><i>u</i><i>a</i><i>d</i><i>t</i></div><div><div class="t1">Daily board</div><div class="t2">4×4 · new theme every day</div></div><span class="chev">›</span></div>
+
+            <p class="gt-h">Group puzzles</p>
+            <p class="gt-sub">Pool your friends’ words into one daily crossword and see who knows them best.</p>
+            <div class="gtile"><div class="gicon"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><circle cx="17" cy="9" r="2.4"/><path d="M16 14.2c2.6-.3 4.5 1.3 5 4.3"/></svg></div><div><div class="t1">Your groups</div><div class="t2">Start one, or join with a code</div></div><span class="chev">›</span></div>
+          </div>
+          <div class="tabbar">
+            <div><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</div>
+            <div><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>Reader</div>
+            <div><svg viewBox="0 0 24 24"><path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>Lists</div>
+            <div class="badge"><svg viewBox="0 0 24 24"><path d="M3 9l9-5 9 5-9 5-9-5zm4 3v5c2 2 8 2 10 0v-5"/></svg>Study<b>14</b></div>
+            <div class="on"><svg viewBox="0 0 24 24"><path d="M9 4h6v4h4v6h-4v6H9v-6H5V8h4z"/></svg>Games</div>
+            <div><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Settings</div>
+          </div>
+        </div>
+      </div>
+      <p class="caption" style="text-align:center">Four puzzles a day, each one built around words from your own Lexery — and a leaderboard to climb.</p>
+    </div>
+  </section>
+
+  <!-- ============ GAMES / CROSSWORD ============ -->
+  <div class="runhead" id="games"><span class="guide">acrostic — cabal</span><span>Games</span><span class="pg">01</span></div>
+  <section class="feature">
+    <div>
+      <h2>A daily crossword, seeded from your own words.<span class="fpos">crossword</span></h2>
+      <span class="ipa">/ˈkrɒswɜːd/ · noun · 5×5 · 9×9 · 17×17</span>
+      <p>Every day brings a Mini, a Midi and a Mega, built to American convention — 180° symmetry, no entry under three letters, every square checked, one connected grid — and <strong>anchored on the words you’re studying</strong>, with a theme that follows the day of the week. Solving a clue counts as a review: producing a word from its definition is exactly what a flashcard would ask of you.</p>
+      <ul class="facts">
+        <li><span class="n">¶</span><span><b>No initialisms, no crosswordese.</b> The fill comes from about 70,000 real, familiarity-rated words.</span></li>
+        <li><span class="n">¶</span><span><b>An editor with taste.</b> Premium puzzles get an AI editorial pass that rewrites clunky clues in plain English and swaps out unfair answers.</span></li>
+        <li><span class="n">¶</span><span><b>Typing skips filled squares</b> and jumps to the next word when one is done.</span></li>
+        <li><span class="n">¶</span><span><b>Stuck? Check a letter, a word or the grid</b> — or reveal one. A reveal marks the puzzle as helped, so it scores nothing on the leaderboards.</span></li>
+        <li><span class="n">¶</span><span><b>Want another?</b> Each size has one fresh start a day, edited like the first. History keeps every puzzle, and progress is saved on every keystroke.</span></li>
+        <li><span class="n">¶</span><span><b>Try it free.</b> Everyone gets a sample Mini; the daily three are part of Premium.</span></li>
+      </ul>
+    </div>
+    <div class="fig">
+      <div class="mock" aria-label="Crossword screen">
+        <div class="appbar" style="padding-bottom:12px"><span class="mock-title">Mini · Thursday</span><span class="xw-chip">3 from your study pool</span></div>
+        <div class="xw" id="xw" tabindex="0" role="application" aria-label="A five-by-five crossword, partly solved. Click a cell and type.">
+          <div class="b"></div><div data-n="1">t</div><div data-n="2">h</div><div data-n="3">e</div><div class="b"></div>
+          <div data-n="4" class="w">s</div><div class="w">h</div><div class="w c">&nbsp;</div><div class="w">r</div><div data-n="5" class="w">d</div>
+          <div data-n="6">e</div><div>r</div><div>r</div><div>&nbsp;</div><div>r</div>
+          <div data-n="7">t</div><div>e</div><div>d</div><div>d</div><div>y</div>
+          <div class="b"></div><div data-n="8">e</div><div>y</div><div>e</div><div class="b"></div>
+        </div>
+        <div class="clues">
+          <div><h5>Across</h5><ol>
+            <li><b>1</b><span>Definite article</span></li>
+            <li class="hot"><b>4</b><span>Broken fragment of pottery or glass<span class="sp" title="from your study pool"></span></span></li>
+            <li><b>6</b><span>Mistake</span></li>
+            <li><b>7</b><span>Bear on a child’s bed</span></li>
+            <li><b>8</b><span>Organ of sight</span></li>
+          </ol></div>
+          <div><h5>Down</h5><ol>
+            <li><b>1</b><span>Crosswords the app builds each day</span></li>
+            <li><b>2</b><span>Robust; able to survive a frost<span class="sp" title="from your study pool"></span></span></li>
+            <li><b>3</b><span>Wear away, as a coastline<span class="sp" title="from your study pool"></span></span></li>
+            <li><b>4</b><span>Group of matching things</span></li>
+            <li><b>5</b><span>Not wet — or a wit that is</span></li>
+          </ol></div>
+        </div>
+        <div class="diff" style="margin-top:14px"><span class="on">Mini 5×5</span><span>Midi 9×9</span><span>Mega 17×17</span></div>
+        <p class="caption" style="margin-left:0">Go on — click a square and type. The cursor skips squares that are already filled.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- word hunt -->
+  <section class="feature flip">
+    <div>
+      <h2>Trace your words through a board.<span class="fpos">word hunt</span></h2>
+      <span class="ipa">/hʌnt/ · noun · 4×4 · one theme a day</span>
+      <p>The second daily game is a sixteen-letter board: drag through adjacent tiles to find words. Each board is <strong>built around up to two of your study words — due cards first — and one word from the day’s theme</strong>, placed so they can share tiles. If an anchor won’t fit, the board says which one it dropped rather than quietly claiming it.</p>
+      <ul class="facts">
+        <li><span class="n">¶</span><span><b>Finding a study word shows its definition</b> — but never grades the card. Seeing the letters isn’t recall.</span></li>
+        <li><span class="n">¶</span><span><b>Main words vs bonus words.</b> Completion is measured against the ~40 familiar words on the board; the other 170,000 spellings the board recognises score, but are never required.</span></li>
+        <li><span class="n">¶</span><span><b>36 themes</b> — music, law, at sea, chemistry — one per calendar day; every theme word lights up when found.</span></li>
+        <li><span class="n">¶</span><span><b>Fixed answer sets.</b> Each board is solved completely when it’s made and saved with the puzzle, so a dictionary update can never move the goalposts under a game in progress.</span></li>
+      </ul>
+    </div>
+    <div class="fig">
+      <div class="mock" aria-label="Word Hunt screen">
+        <div class="appbar" style="padding-bottom:12px"><span class="mock-title">Word Hunt · Saturday</span><span class="xw-chip">At sea · 1/1</span></div>
+        <div class="hunt-wrap">
+        <div class="hunt" role="img" aria-label="A four-by-four letter board with the word lambent traced">
+          <div>h</div><div>e</div><div class="tr lit" style="--i:0">l</div><div class="tr lit" style="--i:1">a</div>
+          <div class="tr lit" style="--i:6">t</div><div class="tr lit" style="--i:5">n</div><div class="tr lit" style="--i:3">b</div><div class="tr lit" style="--i:2">m</div>
+          <div>r</div><div>i</div><div class="tr lit" style="--i:4">e</div><div>s</div>
+          <div>u</div><div>a</div><div>d</div><div>t</div>
+          <svg class="trace" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline pathLength="1" points="62.9,11.4 88.6,11.4 88.6,37.1 62.9,37.1 62.9,62.9 37.1,37.1 11.4,37.1"/></svg>
+        </div>
+        </div>
+        <div class="hunt-def anim"><span class="tag">From your Lexery</span><br><b>lambent</b> <span style="color:var(--ink-2)">of light or flame: playing lightly over a surface; flickering</span></div>
+        <div class="found"><span class="th">helm</span><span>tide</span><span>ride</span><span>bent</span><span>best</span><span>nest</span><span>dirt</span><span class="bn">aide</span></div>
+        <div class="hunt-stats"><span>Main <b>7 / 38</b></span><span>Bonus <b>1</b></span><span>Study words <b>1 / 2</b></span><span><b>3:41</b></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ GROUPS & LEADERBOARD ============ -->
+  <div class="runhead" id="groups"><span class="guide">cabal — coterie</span><span>Groups</span><span class="pg">02</span></div>
+  <section class="feature">
+    <div>
+      <h2>Pool your words. See who knows them best.<span class="fpos">groups</span></h2>
+      <span class="ipa">/ɡruːps/ · noun, plural · up to twelve</span>
+      <p>Start a group, choose what it plays — <strong>a crossword at the size you like (Mini, Midi or Mega) or a Word Hunt board</strong> — and pass round its invite code. Everyone who switches on <em>Share my words</em> adds the words they’re studying to a common pool, and each day the pool becomes one puzzle the whole group solves, the same for everyone.</p>
+      <ul class="facts">
+        <li><span class="n">¶</span><span><b>Only headwords are shared</b> — never your notes, pinned meanings or lookups. Switch sharing off and your words leave the pool at once.</span></li>
+        <li><span class="n">¶</span><span><b>One puzzle a day, polished once.</b> Whoever opens it first builds it and the AI editor goes over the clues; everyone else gets that same puzzle.</span></li>
+        <li><span class="n">¶</span><span><b>Anyone signed in can join</b> with a code and share words; starting a group and playing its puzzle are part of Premium. Up to five groups each.</span></li>
+        <li><span class="n">¶</span><span><b>A leaderboard for the group</b> — today’s scores, plus everyone’s points this week and all time. Points reward right answers, finishing, finishing unaided, and pace.</span></li>
+        <li><span class="n">¶</span><span><b>And a public one, if you want it.</b> Pick a public name and your puzzle points go on the weekly and all-time board for everyone.</span></li>
+      </ul>
+    </div>
+    <div class="fig">
+      <div class="mock" aria-label="A group's screen: today's shared crossword and the group's scores">
+        <div class="appbar" style="padding-bottom:12px"><span class="mock-title">Thursday book club</span><span class="xw-chip">Midi crossword · 5 members</span></div>
+        <div class="gp-today">
+          <div><div class="t1">Today’s crossword</div><div class="t2">Midi 9×9 · 11 words from the group’s pool</div></div>
+          <span class="play">▶ Play</span>
+        </div>
+        <p class="sec" style="margin:16px 0 0">This week</p>
+        <table class="board">
+          <tr><td>1</td><td class="nm">Priya</td><td>4 puzzles</td><td>2,310</td></tr>
+          <tr class="me"><td>2</td><td class="nm">You</td><td>4 puzzles</td><td>2,145</td></tr>
+          <tr><td>3</td><td class="nm">Tom</td><td>3 puzzles</td><td>1,480</td></tr>
+          <tr><td>4</td><td class="nm">Aunt Ros</td><td>2 puzzles</td><td>655</td></tr>
+          <tr><td>5</td><td class="nm">Sam</td><td>not played</td><td>0</td></tr>
+        </table>
+        <div class="share-row">
+          <div><div class="t1">Share my words</div><div class="t2">Headwords only — never notes, pinned meanings or lookups.</div></div>
+          <span class="switch" aria-label="on"></span>
+        </div>
+        <div class="code"><span>Invite code</span><b>K7QM2XPD</b></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ DICTIONARY ============ -->
+  <div class="runhead" id="dictionary"><span class="guide">coterie — lexicon</span><span>Dictionary</span><span class="pg">03</span></div>
+  <section class="feature flip">
+    <div>
+      <h2>740,000 entries, and not one needs a signal.<span class="fpos">dictionary</span></h2>
+      <span class="ipa">/ˈdɪkʃənəri/ · noun · the whole book, in your pocket</span>
+      <p>The English Wiktionary — every sense, origin, example and inflection — ships inside the app, so a lookup works in airplane mode, on a train, in a basement. Every entry reads in the same fixed order, and <strong>every word inside it is its own lookup</strong>: a definition, an etymology, an example sentence.</p>
+      <ul class="facts">
+        <li><span class="n">¶</span><span><b>Keep the word, or just one meaning of it.</b> <em>Add to Lexery</em> puts it in your study pool; hold a sense to make that the one the flashcard asks about.</span></li>
+        <li><span class="n">¶</span><span><b>Hear it</b> in whichever of your phone’s offline English voices you like best.</span></li>
+        <li><span class="n">¶</span><span><b>Spellings fold together</b> — <em>colour</em> and <em>color</em>, <em>shew</em> and <em>show</em> are one card, not two.</span></li>
+        <li><span class="n">¶</span><span><b>A word of the day</b> opens the Search tab, grown into a crossword-style board you can pan around — tiles tinted by what’s already in your Lexery.</span></li>
+      </ul>
+    </div>
+    <div class="fig">
+      <div class="phone" aria-label="Entry detail screen for the word lambent">
+        <div class="screen">
+          <div class="status"><span>9:41</span><span>◐ ▂▄▆</span></div>
+          <div class="screen-body">
+            <div class="appbar">
+              <span>‹ Search</span>
+              <span class="acts">
+                <span title="Add to list"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7M17 15v6M14 18h6"/></svg></span>
+              </span>
+            </div>
+            <div class="card">
+              <p class="hw">lambent</p>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <span class="ipa" style="font-size:15px;color:var(--ink-2)">/ˈlæmbənt/</span>
+                <span class="tts" style="width:22px;height:22px"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z"/></svg></span>
+                <span class="play" style="margin-left:auto">＋ Add to Lexery</span>
+              </div>
+            </div>
+            <div class="card">
+              <p class="sec">Adjective</p>
+              <ol class="m-senses">
+                <li><span class="n">1</span><span>Of light or flame: <span class="tap">playing</span> lightly over a surface; <span class="tap">flickering</span>, softly <span class="tap">glowing</span>.<span class="pin" title="pinned to the study card">✓</span></span></li>
+                <li><span class="n">2</span><span>Of wit or style: <span class="tap">brilliant</span> in a light, effortless way.</span></li>
+              </ol>
+              <p class="pin-cap">Hold a meaning to study just that one · 1 on the card</p>
+            </div>
+            <div class="card">
+              <p class="sec">Word origin</p>
+              <p style="margin:0;color:var(--ink-2)">From Latin <em>lambēns</em>, present participle of <em>lambere</em> “to <span class="tap">lick</span>” — a flame that licks at what it touches.</p>
+            </div>
+            <div class="card">
+              <p class="sec">Examples</p>
+              <ul class="ex">
+                <li>the lambent glow of the last coals”</li>
+                <li>a lambent, unhurried wit”</li>
+                <li>moonlight lambent on the water”</li>
+              </ul>
+              <span class="more">4 more examples ›</span>
+            </div>
+            <div class="card">
+              <p class="sec">Forms &amp; conjugations</p>
+              <div class="chips"><span class="chip">more lambent</span><span class="chip">most lambent</span><span class="chip">lambently</span><span class="chip">lambency</span></div>
+            </div>
+            <div class="card">
+              <p class="sec">Notes</p>
+              <p class="note">Not *lambaste*. Think <code>lamp</code> — a low, licking light. ✎</p>
+            </div>
+          </div>
+          <div class="tabbar">
+            <div class="on"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</div>
+            <div><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>Reader</div>
+            <div><svg viewBox="0 0 24 24"><path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>Lists</div>
+            <div class="badge"><svg viewBox="0 0 24 24"><path d="M3 9l9-5 9 5-9 5-9-5zm4 3v5c2 2 8 2 10 0v-5"/></svg>Study<b>14</b></div>
+            <div><svg viewBox="0 0 24 24"><path d="M9 4h6v4h4v6h-4v6H9v-6H5V8h4z"/></svg>Games</div>
+            <div><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>Settings</div>
+          </div>
+        </div>
+      </div>
+      <p class="caption" style="text-align:center">Every entry in the same fixed order — and every word inside it is its own lookup.</p>
+    </div>
+  </section>
+
+  <!-- search -->
+  <section class="feature" id="search">
+    <div>
+      <h2>Type. Results land before the next key.<span class="fpos">search</span></h2>
+      <span class="ipa">/sɜːtʃ/ · verb · to find without waiting</span>
+      <p>The dictionary is one on-device database with a full-text index, so results refresh <strong>within a single frame of each keystroke</strong>. Every part of speech that shares a headword is merged into one ranked result, so <em>muse</em> the noun and <em>muse</em> the verb are one card, not two.</p>
+      <ul class="facts">
+        <li><span class="n">¶</span><span><b>Inflection search.</b> <em>ran</em>, <em>better</em>, <em>mice</em> resolve to run, good, mouse.</span></li>
+        <li><span class="n">¶</span><span><b>A trailing space means exact.</b> Type <em>muse␣</em> and <em>museum</em> stops showing up.</span></li>
+      </ul>
+    </div>
+    <div class="fig">
+      <div class="mock" aria-label="Search screen">
+        <div class="searchbox">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+          <span class="q" id="sq">lamb<i></i></span>
+        </div>
+        <ul class="results" id="sres" aria-live="polite">
+          <li data-w="lamb"><span><span class="w"><mark>lamb</mark></span><span class="g">a young sheep; the meat of it; a gentle or innocent person</span></span><span class="rk">#2,410</span></li>
+          <li data-w="lambent"><span><span class="w"><mark>lamb</mark>ent</span><span class="g">of light or flame: playing lightly over a surface; flickering</span></span><span class="rk">#41,893</span></li>
+          <li data-w="lambaste"><span><span class="w"><mark>lamb</mark>aste</span><span class="g">to criticise harshly; historically, to beat</span></span><span class="rk">#38,207</span></li>
+          <li data-w="lambda"><span><span class="w"><mark>lamb</mark>da</span><span class="g">the eleventh letter of the Greek alphabet; an anonymous function</span></span><span class="rk">#19,660</span></li>
+          <li data-w="lambing"><span><span class="w"><mark>lamb</mark>ing</span><span class="g">→ <span class="lem">lamb</span> &nbsp;present participle; the season when ewes give birth</span></span><span class="rk">form</span></li>
+        </ul>
+        <p class="caption" id="scap">Prefix match over every headword. Frequency rank at right; inflected forms route to their lemma.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ READER ============ -->
+  <div class="runhead" id="reader"><span class="guide">lexicon — lucid</span><span>Reader</span><span class="pg">04</span></div>
+  <section class="feature flip">
+    <div>
+      <h2>Copy anything. Open the tab. It’s a page.<span class="fpos">reader</span></h2>
+      <span class="ipa">/ˈriːdə/ · noun · a page that answers back</span>
+      <p>The Reader pulls in whatever is on your clipboard the moment you open it — headings and bold survive — and lays it out like a sheet of paper. Then it does the thing paper can’t:</p>
+      <ul class="facts">
+        <li><span class="n">¶</span><span><b>Words in your lists</b> glow in that list’s highlighter colour.</span></li>
+        <li><span class="n">¶</span><span><b>Words in your Lexery</b> are underlined; <b>uncommon words</b> get a dotted line — so you see where your gaps are before you tap.</span></li>
+        <li><span class="n">¶</span><span><b>Tap</b> for a peek panel with senses and IPA. <b>Long-press</b> for the full entry. Any inflected form finds its lemma.</span></li>
+        <li><span class="n">¶</span><span><b>History</b> keeps every text you’ve read; you can also write one by hand.</span></li>
+      </ul>
+    </div>
+    <div class="fig">
+      <div class="mock" aria-label="Reader screen">
+        <div class="legend"><span class="la">GRE · yellow</span><span class="lb">From novels · green</span><span><u class="st">in Lexery</u></span><span><u class="un">uncommon</u></span><span>Aa</span></div>
+        <div class="page">
+          <h4>On the Morning of the Storm</h4>
+          <p>The sky had gone the colour of <span class="hl-a rw" data-w="pewter" tabindex="0">pewter</span>, and the lamps along the quay burned with a <span class="hl-b st rw" data-w="lambent" tabindex="0">lambent</span>, uncertain light. Marguerite was <span class="st rw" data-w="taciturn" tabindex="0">taciturn</span> at breakfast; her brother, never one to <span class="un rw" data-w="stint" tabindex="0">stint</span> on conversation, filled the silence with <span class="hl-a rw" data-w="garrulous" tabindex="0">garrulous</span> speculation about the tide.</p>
+          <p>By noon the <span class="un rw" data-w="halyards" tabindex="0">halyards</span> were <span class="un rw" data-w="thrumming" tabindex="0">thrumming</span>, and the harbourmaster — a man of famously <span class="hl-a st rw cur" data-w="saturnine" tabindex="0">saturnine</span> temperament — had begun, quietly, to <span class="hl-b rw" data-w="demur" tabindex="0">demur</span>.</p>
+        </div>
+        <div class="peek" id="peek">
+          <p class="hw" id="pk-hw">saturnine</p>
+          <div style="font-size:13px;color:var(--ink-2)"><span id="pk-ipa">/ˈsætənaɪn/</span> &nbsp;<span class="pos" style="font-size:10px" id="pk-pos">adjective</span> <span class="lem" id="pk-lem" style="font-family:var(--ui);font-size:11px;color:var(--moss)"></span></div>
+          <div style="font-size:14px;margin-top:6px" id="pk-def">1 &nbsp;Gloomy, sluggish, or sardonic in temperament. &nbsp;2 &nbsp;Of or relating to lead, or lead poisoning.</div>
+          <div class="row"><span>+ List</span><span>Add to Lexery</span><span>Full card</span></div>
+        </div>
+        <p class="caption">Tap a marked word — an inflected form finds its lemma.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ LEXERY & LISTS ============ -->
+  <div class="runhead" id="lists"><span class="guide">lucid — lustrous</span><span>Lexery &amp; lists</span><span class="pg">05</span></div>
+  <section class="feature">
+    <div>
+      <h2>Keep the ones worth keeping.<span class="fpos">lexery</span></h2>
+      <span class="ipa">/ˈlɛksəri/ · noun · your own growing store of words</span>
+      <p>Your <strong>Lexery</strong> is every word you’ve decided to learn — added from search, the Reader or a puzzle — and it’s what the flashcards and the daily games are built from. Lists sit alongside for organising: a list can hold words and other lists, nested as deep as you like, and <strong>▶ Study on a folder adds every word inside it, at any depth, to your Lexery</strong>. Pause, reset or remove a whole subtree the same way.</p>
+      <ul class="facts">
+        <li><span class="n">¶</span><span><b>A note per word</b>, in Markdown, shown on the entry and on the back of its flashcard.</span></li>
+        <li><span class="n">¶</span><span><b>A colour per list</b>, which is what the Reader uses to light your words up.</span></li>
+        <li><span class="n">¶</span><span><b>Due counts on every list</b>, so the Lists tab doubles as a to-do list.</span></li>
+      </ul>
+    </div>
+    <div class="fig">
+      <div class="mock" aria-label="Lists screen">
+        <div class="appbar"><span class="mock-title">Lists</span><span style="font-family:var(--ui);font-size:12px;color:var(--moss)">+ New list &nbsp; + New folder</span></div>
+        <div class="listgrid">
+          <div class="lcard folder"><div class="sw" style="background:var(--ochre)"></div><div><div class="name">Exam prep</div><div class="sub">3 lists · 412 words · <b style="color:var(--ochre)">31 due</b></div></div><span class="play">▶ Study</span></div>
+          <div class="lcard"><div class="sw" style="background:#D3A45C"></div><div class="name">GRE high-frequency</div><div class="cnt">287 words · <b>19 due</b></div></div>
+          <div class="lcard"><div class="sw" style="background:#7FBBA0"></div><div class="name">From novels</div><div class="cnt">64 words · <b>6 due</b></div></div>
+          <div class="lcard"><div class="sw" style="background:#9AA6C9"></div><div class="name">Near-synonyms to untangle</div><div class="cnt">41 words · <b>4 due</b></div></div>
+          <div class="lcard"><div class="sw" style="background:#C98A8A"></div><div class="name">Words I keep misusing</div><div class="cnt">12 words · paused</div></div>
+        </div>
+        <p class="caption">Folders resolve to their whole subtree — one tap studies, pauses or resets everything inside.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STUDY ============ -->
+  <div class="runhead" id="study"><span class="guide">lustrous — mnemonic</span><span>Study</span><span class="pg">06</span></div>
+  <section class="feature flip">
+    <div>
+      <h2>Review on the day you were about to forget.<span class="fpos">study</span></h2>
+      <span class="ipa">/ˈstʌdi/ · verb · SM-2, unmodified</span>
+      <p>Word Wizard schedules with <strong>SuperMemo-2</strong>, the same family Anki grew out of. Each card carries its own ease factor; every <em>Good</em> multiplies the interval by it, <em>Hard</em> nudges by 1.2×, and <em>Again</em> sends it back to tomorrow. Try it — the demo on the right runs the app’s actual scheduler.</p>
+      <ul class="facts">
+        <li><span class="n">¶</span><span><b>Both directions, separately.</b> Recognising <em>abstruse</em> and producing it from its definition are different memories; each gets its own card, ease and history, and siblings are spaced apart in the queue.</span></li>
+        <li><span class="n">¶</span><span><b>You choose which meaning counts.</b> Hold a sense on the entry to pin it to the card. Pin nothing and each session deals one or two of the word’s meanings at random — so a word with eight senses isn’t forever tested on whichever one the dictionary listed first.</span></li>
+        <li><span class="n">¶</span><span><b>Swipe to grade</b> — right for <em>Good</em>, left for <em>Again</em>. Undo the last grade, or mark a word you know cold as mastered.</span></li>
+        <li><span class="n">¶</span><span><b>A recap when you stop</b> — the grade tally, what’s still due today, and every word with the day it comes back. Misses first, tap to reread.</span></li>
+        <li><span class="n">¶</span><span><b>Two reminders a day</b>, each naming a real word that’s about to come due.</span></li>
+      </ul>
+    </div>
+    <div class="fig">
+      <div class="mock study" aria-label="Interactive SM-2 scheduler demo">
+        <div class="deck" id="deck">
+          <div class="sc" id="card" tabindex="0" role="button" aria-label="Tap to reveal the meaning">
+            <div class="face front">
+              <div class="stage" id="stage">Card 1 of 5 · New · word → meaning</div>
+              <div class="word" id="c-word">abstruse</div>
+              <div class="hint">Tap to reveal</div>
+            </div>
+            <div class="face back">
+              <div class="stage" id="stage-back">Meaning</div>
+              <div class="word" id="c-word-back">abstruse</div>
+              <div class="def" id="c-def"><em>adj.</em> difficult to understand; obscure, recondite — <em>an abstruse proof</em></div>
+            </div>
+          </div>
+        </div>
+        <div class="grades" role="group" aria-label="Grade this card">
+          <button type="button" data-g="again" id="g-again" disabled><b>Again</b><span>1 d</span></button>
+          <button type="button" data-g="hard" id="g-hard" disabled><b>Hard</b><span>1 d</span></button>
+          <button type="button" data-g="good" id="g-good" disabled><b>Good</b><span>1 d</span></button>
+          <button type="button" data-g="easy" id="g-easy" disabled><b>Easy</b><span>1 d</span></button>
+        </div>
+        <div class="srs-state">
+          <div><small>Interval</small><b id="st-int">0 d</b></div>
+          <div><small>Ease</small><b id="st-ef">2.50</b></div>
+          <div><small>Reviews</small><b id="st-reps">0</b></div>
+        </div>
+        <div class="timeline" id="timeline" aria-hidden="true"><div class="axis"></div><span class="cap" id="tl-cap"></span></div>
+        <div class="log" id="log" aria-live="polite"></div>
+        <div class="demo-foot"><span id="foot">Reveal, then grade. Each word keeps its own schedule.</span><button type="button" id="reset">Reset deck</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- recall games -->
+  <section class="feature">
+    <div>
+      <h2>Eight games, each aimed at the half you missed.<span class="fpos prem">recall · premium</span></h2>
+      <span class="ipa">/rɪˈkɔːl/ · noun · look, cover, remember</span>
+      <p>Swipe a card up for <em>didn’t know it</em> and, instead of just showing the answer, a recall game runs first. It’s keyed to the side you were asked for: <strong>a word card asks you to rebuild the meaning; a meaning card asks you to produce the word.</strong> After the reveal, a second exercise works the other half, so every review touches both. None of it changes your grade — a game that fed into grading would reward guessing at tiles instead of knowing the word.</p>
+      <ul class="facts">
+        <li><span class="n">¶</span><span><b>For the word</b> — Crack the word (tiles that give up one letter at a time, never the last for free), Fill the gap, Spell it out, Sound it out, and Guess from AI-written clues.</span></li>
+        <li><span class="n">¶</span><span><b>For the meaning</b> — Which meaning is it?, Rebuild the meaning (the definition shattered into chips), and Where does it belong? — three real sentences from the dictionary, only one of which wants this word.</span></li>
+        <li><span class="n">¶</span><span><b>The wrong answers are on-topic.</b> Distractors are drawn from half a million dictionary example sentences and ranked by shared content words, so you can’t tell them apart by subject alone — it’s a test of usage, not of style.</span></li>
+        <li><span class="n">¶</span><span><b>Sound it out is deliberately meaning-free</b> — syllables as beats, first letter, a rhyme read aloud. Tip-of-the-tongue research says a sound cue unsticks a recall that another meaning cue won’t.</span></li>
+        <li><span class="n">¶</span><span><b>Every game is skippable</b>, and a dice button deals a different one for the same card.</span></li>
+      </ul>
+    </div>
+    <div class="fig">
+      <div class="mock games" aria-label="Recall games">
+        <div class="side">Word card · before the reveal</div>
+        <div class="game">
+          <div class="gt">Where does it belong?</div>
+          <div class="opts">
+            <div class="opt" data-ok="0" tabindex="0">The committee’s report was so <span class="gap"></span> that no one in the chamber could follow it.</div>
+            <div class="opt" data-ok="1" tabindex="0">The lecture grew so <span class="gap"></span> that even the graduate students stopped taking notes.</div>
+            <div class="opt" data-ok="0" tabindex="0">Her explanation was <span class="gap"></span> enough for a child to repeat.</div>
+          </div>
+        </div>
+        <div class="game">
+          <div class="gt">Rebuild the meaning</div>
+          <div class="rebuild"><span class="placed">difficult to</span><span class="placed">understand;</span><span class="slot">&nbsp;</span><span class="slot">&nbsp;</span></div>
+          <div class="rebuild" style="margin-top:8px"><span>recondite</span><span>obscure,</span></div>
+        </div>
+        <div class="side">Meaning card · before the reveal</div>
+        <div class="game">
+          <div class="gt">Crack the word</div>
+          <div class="tiles" id="tiles" role="group" aria-label="Letter tiles for abstruse; click to reveal one more letter"><div class="tile on">a</div><div class="tile">&nbsp;</div><div class="tile">&nbsp;</div><div class="tile on">t</div><div class="tile">&nbsp;</div><div class="tile">&nbsp;</div><div class="tile">&nbsp;</div><div class="tile">&nbsp;</div></div>
+          <p class="caption" style="margin-left:0" id="tilecap">2 of 8 revealed · tap a tile for one more · 🎲</p>
+        </div>
+        <div class="game">
+          <div class="gt">Sound it out</div>
+          <div class="cue"><span><span class="beats"><i></i><i></i></span>2 beats</span><span>starts with <b>a</b></span><span>rhymes with <b>excuse</b> 🔈</span></div>
+        </div>
+        <div class="game" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <div><div class="gt" style="margin:0">Match what you missed</div><div style="font-size:13px;color:var(--ink-2)">Ends the session by pairing every <em>Again</em> with its definition.</div></div>
+          <span class="play" style="background:var(--moss)">3 pairs</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PROGRESS ============ -->
+  <div class="runhead" id="progress"><span class="guide">mnemonic — obdurate</span><span>Progress</span><span class="pg">07</span></div>
+  <section class="feature flip">
+    <div>
+      <h2>Every number in its own units. No score.<span class="fpos">progress</span></h2>
+      <span class="ipa">/ˈprəʊɡrɛs/ · noun · what actually happened</span>
+      <p>There is no composite “vocabulary score”, no XP, no level. The one headline is <strong>words mastered</strong> — cards past 90 days with their ease intact — and everything else is reported in the unit it was measured in: reviews, minutes, days, solves.</p>
+      <ul class="facts">
+        <li><span class="n">¶</span><span><b>Retention</b> — the share of reviews on cards three or more weeks out that you didn’t forget. The honest number, not the flattering one.</span></li>
+        <li><span class="n">¶</span><span><b>Best times are unaided solves only</b>, per game and per size — with words solved and time played for the ones you didn’t finish.</span></li>
+        <li><span class="n">¶</span><span><b>Looked up more than once</b> — words you searched for and opened again are listed with a one-tap <em>Study</em>. Repeat lookups are the app telling you which words to keep.</span></li>
+        <li><span class="n">¶</span><span><b>Twelve weeks of activity</b> — reviews, lookups and games per day — and a plain-text share card, if you want to show someone.</span></li>
+      </ul>
+    </div>
+    <div class="fig">
+      <div class="mock" aria-label="Progress screen">
+        <div class="headline">312<small>words mastered</small></div>
+        <div class="pbar"><i style="width:31%;background:var(--moss)"></i><i style="width:38%;background:var(--ochre)"></i><i style="width:14%;background:rgba(211,164,92,0.5)"></i><i style="width:17%;background:var(--rule)"></i></div>
+        <div class="pkey"><span><i style="background:var(--moss)"></i>312 mastered</span><span><i style="background:var(--ochre)"></i>388 reviewing</span><span><i style="background:rgba(211,164,92,0.5)"></i>141 learning</span><span><i style="background:var(--rule)"></i>170 in lists</span></div>
+        <div class="units">
+          <div><small>Reviews</small><b>4,812</b></div>
+          <div><small>Study time</small><b>41 h 06 m</b></div>
+          <div><small>Retention</small><b>91%</b></div>
+          <div><small>Streak</small><b>23 d</b></div>
+          <div><small>Lookups</small><b>1,207</b></div>
+          <div><small>Texts read</small><b>58</b></div>
+        </div>
+        <p class="sec" style="margin:14px 0 0">Last 12 weeks</p>
+        <div class="heat" aria-hidden="true">
+          <i class="l1"></i><i class="l2"></i><i class="l1"></i><i></i><i class="l3"></i><i class="l2"></i><i class="l2"></i><i class="l1"></i><i class="l3"></i><i class="l2"></i><i class="l3"></i><i class="l3"></i>
+          <i class="l2"></i><i class="l1"></i><i></i><i class="l2"></i><i class="l2"></i><i class="l3"></i><i class="l1"></i><i class="l2"></i><i class="l2"></i><i class="l3"></i><i class="l2"></i><i class="l3"></i>
+          <i></i><i class="l2"></i><i class="l1"></i><i class="l1"></i><i class="l2"></i><i class="l2"></i><i class="l3"></i><i class="l3"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l2"></i>
+          <i class="l1"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i></i><i class="l1"></i><i class="l2"></i><i class="l2"></i><i class="l3"></i><i class="l3"></i><i class="l2"></i><i class="l3"></i>
+          <i class="l2"></i><i></i><i class="l2"></i><i class="l2"></i><i class="l1"></i><i class="l3"></i><i class="l2"></i><i class="l1"></i><i class="l2"></i><i class="l2"></i><i class="l3"></i><i class="l3"></i>
+          <i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l1"></i><i class="l2"></i><i class="l2"></i><i></i><i class="l3"></i><i class="l2"></i><i class="l3"></i><i class="l2"></i><i class="l3"></i>
+          <i class="l2"></i><i class="l3"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l1"></i><i class="l2"></i><i class="l2"></i><i class="l3"></i><i class="l2"></i><i class="l3"></i><i class="l2"></i>
+        </div>
+        <p class="sec" style="margin:14px 0 0">Games</p>
+        <table class="ptable"><tr><th>Game</th><th>Solved</th><th>Best</th><th>Typical</th></tr>
+          <tr><td>Mini 5×5</td><td>41</td><td>0:48</td><td>1:52</td></tr>
+          <tr><td>Midi 9×9</td><td>17</td><td>6:10</td><td>11:30</td></tr>
+          <tr><td>Word Hunt</td><td>9</td><td>2:57</td><td>5:14</td></tr>
+        </table>
+        <p class="caption" style="margin-left:0">Best times count unaided solves only.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FREE & PREMIUM ============ -->
+  <div class="runhead" id="premium"><span class="guide">obdurate — premium</span><span>Free &amp; Premium</span><span class="pg">08</span></div>
+  <section class="feature" style="display:block">
+    <div class="premium-head">
+      <h2>Free to use. Premium to play.<span class="fpos">premium</span></h2>
+      <span class="ipa">/ˈpriːmiəm/ · noun · the daily games, and no ads</span>
+      <p>The dictionary, the Reader and the flashcards are free, for good. Premium turns the words you save into daily games.</p>
+    </div>
+    <div class="plans">
+      <div class="plan">
+        <h3>Free</h3>
+        <p class="for">Everything you need to look words up and learn them</p>
+        <ul>
+          <li>The 740,000-entry dictionary, offline, with pronunciation and word origins</li>
+          <li>The Reader, for anything you copy</li>
+          <li>Your Lexery, lists and notes</li>
+          <li>Spaced-repetition flashcards in both directions, with reminders</li>
+          <li>Word of the day and the Progress screen</li>
+          <li>A sample Mini crossword, and joining friends’ groups</li>
+          <li class="ad">Ads: a banner in word entries, and now and then one at the end of a review session</li>
+        </ul>
+      </div>
+      <div class="plan prem">
+        <h3>Premium</h3>
+        <p class="for">Everything in Free, plus</p>
+        <ul>
+          <li>Three personalized crosswords every day, with the AI editor</li>
+          <li>A daily Word Hunt built from your words</li>
+          <li>Recall games in every study session</li>
+          <li>Starting group puzzles and playing them with friends</li>
+          <li>No ads</li>
+        </ul>
+      </div>
+    </div>
+    <p class="plans-note">Premium comes as a monthly or yearly subscription, or as a one-time <strong>Founding Member</strong> purchase limited to the first 500 people. Prices are shown in the App Store or Google Play before you buy. An account is optional — sign in with Apple, Google or email when you want Premium on another phone, groups or the leaderboard; one account carries Premium across iPhone and Android.</p>
+  </section>
+
+  <!-- ============ SPECS ============ -->
+  <section class="specs" id="specs">
+    <h2>Particulars</h2>
+    <dl class="spec-grid">
+      <div class="spec"><dt>Dictionary</dt><dd><b>740k</b>entries from the English Wiktionary, built by the app’s own pipeline</dd></div>
+      <div class="spec"><dt>Search latency</dt><dd><b>&lt;50 ms</b>per keystroke, from an on-device full-text index</dd></div>
+      <div class="spec"><dt>Offline</dt><dd><b>Yes</b>dictionary, Reader, study and daily puzzles all run on the phone</dd></div>
+      <div class="spec"><dt>Daily puzzles</dt><dd><b>4</b>three crosswords and a Word Hunt board, with 36 rotating themes</dd></div>
+      <div class="spec"><dt>Recall games</dt><dd><b>8</b>keyed to the half of the card you missed; none of them touch the schedule</dd></div>
+      <div class="spec"><dt>Groups</dt><dd><b>12</b>members at most, one shared crossword or Word Hunt a day</dd></div>
+      <div class="spec"><dt>Scheduler</dt><dd><b>SM-2</b>with per-card ease, two directions, sibling spacing</dd></div>
+      <div class="spec"><dt>Crossword fill</dt><dd><b>~70k</b>real words — the Crosswordler engine, ported to Dart</dd></div>
+      <div class="spec"><dt>Your words</dt><dd><b>On device</b>Lexery, lists, notes and reading stay on your phone; only what you choose to share leaves it</dd></div>
+      <div class="spec"><dt>Accounts</dt><dd><b>Optional</b>Apple, Google or email — no password</dd></div>
+      <div class="spec"><dt>Platforms</dt><dd><b>iOS 13+</b>Android 7+ · dark mode follows the system, or pick one</dd></div>
+      <div class="spec"><dt>Install size</dt><dd><b>~500 MB</b>the whole dictionary ships with the app</dd></div>
+    </dl>
+  </section>
+
+  <footer>
+    <p>Word Wizard is made by William Gill. Dictionary content derives from the English Wiktionary via Kaikki.org, under CC BY-SA; the other word lists and their licences are listed in the app under Settings → About. Built with Flutter.</p>
+    <p><a href="/privacy">Privacy policy</a> · <a href="/terms">Terms of use</a> · <a href="/delete-account">Delete your account</a> · <a href="mailto:willcharlesgill@gmail.com">Contact</a> · <a href="#top">Back to the top ↑</a></p>
+  </footer>
+</div>
+
+<script>
+  // The app's scheduler (lib/domain/srs/sm2.dart), line for line.
+  const MIN_EF = 1.3, EASY_BONUS = 0.15, HARD_MULT = 1.2, MASTER_DAYS = 90, MASTER_EF = 2.5;
+  const Q = { again: 0, hard: 3, good: 4, easy: 5 };
+  const initial = { reps: 0, ef: 2.5, interval: 0 };
+
+  function grade(cur, g) {
+    const q = Q[g];
+    if (g === 'hard') {
+      const interval = cur.reps === 0 ? 1 : Math.max(1, Math.round(cur.interval * HARD_MULT));
+      return { reps: cur.reps, ef: cur.ef, interval };
+    }
+    if (q < 3) return { reps: 0, ef: cur.ef, interval: 1 };
+    let ef = cur.ef + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02));
+    if (g === 'easy') ef += EASY_BONUS;
+    ef = Math.max(ef, MIN_EF);
+    const reps = cur.reps + 1;
+    const interval = reps === 1 ? 1 : reps === 2 ? 6 : Math.max(1, Math.round(cur.interval * ef));
+    return { reps, ef, interval };
+  }
+  function stage(s) {
+    if (s.reps === 0) return 'New';
+    if (s.interval >= MASTER_DAYS && s.ef >= MASTER_EF) return 'Mastered';
+    return s.reps < 2 ? 'Learning' : 'Review';
+  }
+  const fmt = d => d >= 365 ? (d / 365).toFixed(1).replace(/\.0$/, '') + ' y' : d >= 30 ? Math.round(d / 30) + ' mo' : d + ' d';
+  const fmtLong = d => d >= 365 ? (d / 365).toFixed(1).replace(/\.0$/, '') + ' years' : d >= 30 ? Math.round(d / 30) + ' months' : d === 1 ? '1 day' : d + ' days';
+
+  const DECK = [
+    { w: 'abstruse',  def: '<em>adj.</em> difficult to understand; obscure, recondite — <em>an abstruse proof</em>' },
+    { w: 'lambent',   def: '<em>adj.</em> of light or flame: playing lightly over a surface; flickering — <em>the lambent glow of the coals</em>' },
+    { w: 'saturnine', def: '<em>adj.</em> gloomy, sluggish, or sardonic in temperament — <em>a saturnine harbourmaster</em>' },
+    { w: 'garrulous', def: '<em>adj.</em> excessively talkative, especially about trivial things — <em>garrulous speculation</em>' },
+    { w: 'taciturn',  def: '<em>adj.</em> habitually silent; reserved in speech — <em>taciturn at breakfast</em>' },
+  ];
+  const cards = DECK.map(() => ({ state: { ...initial }, elapsed: 0, history: [] }));
+  let cur = 0, revealed = false, busy = false;
+  const log = [];
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+
+  function render() {
+    const c = cards[cur], d = DECK[cur], st = stage(c.state);
+    $('c-word').textContent = d.w; $('c-word-back').textContent = d.w; $('c-def').innerHTML = d.def;
+    $('stage').innerHTML = 'Card ' + (cur + 1) + ' of ' + DECK.length + ' · ' + (st === 'New' ? 'New' : '<b>' + st + '</b>') + ' · word → meaning';
+    $('stage-back').textContent = c.state.interval ? 'Meaning · last interval ' + fmtLong(c.state.interval) : 'Meaning';
+    for (const g of Object.keys(Q)) { const b = $('g-' + g); b.querySelector('span').textContent = fmt(grade(c.state, g).interval); b.disabled = !revealed; }
+    $('st-int').textContent = fmt(c.state.interval);
+    $('st-ef').textContent = c.state.ef.toFixed(2);
+    $('st-reps').textContent = c.state.reps;
+    $('log').innerHTML = log.slice(-6).map(h => '<span>' + h.w + ' · ' + h.grade + ' → ' + fmt(h.interval) + '</span>').join('');
+
+    // timeline for this card: enrollment → today → next due, one linear scale
+    const tl = $('timeline');
+    tl.querySelectorAll('.t').forEach(n => n.remove());
+    const span = Math.max(c.elapsed + c.state.interval, 1);
+    const pct = x => (4 + 92 * x / span).toFixed(2) + '%';
+    const mk = (x, cls, label) => { const t = document.createElement('div'); t.className = 't ' + cls; t.style.left = pct(x); t.dataset.l = label; tl.appendChild(t); };
+    mk(0, '', 'enrolled');
+    c.history.forEach(h => { if (h.day > 0 && h.day < c.elapsed) mk(h.day, '', ''); });
+    if (c.elapsed > 0) mk(c.elapsed, 'now', 'today');
+    if (c.state.interval > 0) mk(c.elapsed + c.state.interval, 'due', 'due · +' + fmt(c.state.interval));
+    $('tl-cap').textContent = span > 1 ? d.w + ' · ' + fmtLong(span) + ' shown' : d.w;
+  }
+
+  const card = $('card'), deck = $('deck');
+  function reveal() { if (revealed || busy) return; revealed = true; card.classList.add('revealed'); render(); }
+  card.addEventListener('click', reveal);
+  card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); reveal(); } });
+
+  async function gradeCurrent(g) {
+    if (!revealed || busy) return;
+    busy = true;
+    const c = cards[cur];
+    c.elapsed += c.state.interval;            // pretend we waited until it came due
+    c.state = grade(c.state, g);
+    const label = g[0].toUpperCase() + g.slice(1);
+    c.history.push({ day: c.elapsed, grade: label, interval: c.state.interval });
+    log.push({ w: DECK[cur].w, grade: label, interval: c.state.interval });
+    render();
+    // slide this card out, bring the next one in face-down
+    deck.classList.add('out'); await wait(230);
+    cur = (cur + 1) % DECK.length; revealed = false;
+    card.style.transition = 'none'; card.classList.remove('revealed'); void card.offsetWidth; card.style.transition = '';
+    deck.classList.remove('out'); deck.classList.add('in');
+    render();
+    await wait(320); deck.classList.remove('in');
+    $('foot').textContent = log.length >= DECK.length ? 'Back around the deck — a word\u2019s interval grows each time it comes due.' : 'Reveal, then grade. Each word keeps its own schedule.';
+    busy = false;
+  }
+  for (const g of Object.keys(Q)) $('g-' + g).addEventListener('click', () => gradeCurrent(g));
+  $('reset').addEventListener('click', () => {
+    cards.forEach(c => { c.state = { ...initial }; c.elapsed = 0; c.history = []; });
+    log.length = 0; cur = 0; revealed = false;
+    card.style.transition = 'none'; card.classList.remove('revealed'); void card.offsetWidth; card.style.transition = '';
+    $('foot').textContent = 'Reveal, then grade. Each word keeps its own schedule.';
+    render();
+  });
+  render();
+
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const esc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  // ---- Search: types itself, results narrow per keystroke ----
+  const DICT = [
+    ['lamb', 'a young sheep; the meat of it; a gentle or innocent person', '#2,410'],
+    ['lambent', 'of light or flame: playing lightly over a surface; flickering', '#41,893'],
+    ['lambaste', 'to criticise harshly; historically, to beat', '#38,207'],
+    ['lambda', 'the eleventh letter of the Greek alphabet; an anonymous function', '#19,660'],
+    ['lambing', 'present participle; the season when ewes give birth', 'form', 'lamb'],
+    ['laconic', 'using very few words; terse', '#27,305'],
+    ['lachrymose', 'tearful; given to weeping', '#52,118'],
+    ['lassitude', 'weariness; a lack of energy or interest', '#33,904'],
+    ['muse', 'a source of inspiration; to ponder, to think reflectively', '#8,732'],
+    ['museum', 'a building where objects of interest are kept and shown', '#3,116'],
+    ['musette', 'a small French bagpipe; a light dance for it', '#61,410'],
+    ['mulct', 'to fine; to defraud someone of something', '#58,022'],
+    ['mundane', 'ordinary, worldly; lacking interest or excitement', '#12,880'],
+    ['ran', 'simple past of run — to move swiftly on foot', 'form', 'run'],
+    ['rancid', 'of fats or oils: gone off; having a rank smell', '#29,417'],
+    ['rancour', 'bitter, long-standing resentment', '#31,206'],
+    ['rapacious', 'aggressively greedy; grasping', '#36,590'],
+    ['raconteur', 'a skilled teller of anecdotes', '#44,201'],
+  ];
+  function searchRender(q) {
+    const exact = q.endsWith(' ');
+    const t = q.trim();
+    const hits = !t ? [] : DICT.filter(d => exact ? d[0] === t : d[0].startsWith(t)).slice(0, 5);
+    const list = $('sres');
+    const keep = new Set(hits.map(d => d[0]));
+    [...list.children].forEach(li => { if (!keep.has(li.dataset.w)) li.remove(); });
+    if (!hits.length) {
+      list.innerHTML = '<li class="empty">' + (t ? 'No headword “' + esc(t) + '”' : 'Type to search 740,000 entries') + '</li>';
+    } else {
+      hits.forEach((d, i) => {
+        let li = list.querySelector('li[data-w="' + d[0] + '"]');
+        const fresh = !li;
+        if (fresh) { li = document.createElement('li'); li.dataset.w = d[0]; li.className = 'in'; }
+        li.innerHTML = '<span><span class="w"><mark>' + esc(d[0].slice(0, t.length)) + '</mark>' + esc(d[0].slice(t.length)) + '</span><span class="g">' +
+          (d[3] ? '→ <span class="lem">' + d[3] + '</span> &nbsp;' : '') + esc(d[1]) + '</span></span><span class="rk">' + d[2] + '</span>';
+        if (list.children[i] !== li) list.insertBefore(li, list.children[i] || null);
+      });
+    }
+    $('sq').innerHTML = esc(t) + (exact ? '<span class="sp"></span>' : '') + '<i></i>';
+  }
+  const SCRIPT = [
+    { type: 'lamb', cap: 'Prefix match over every headword. Frequency rank at right; inflected forms route to their lemma.' },
+    { type: 'muse', cap: 'Every part of speech sharing a headword is one result: <em>muse</em> the noun and the verb together.' },
+    { type: ' ', cap: 'A trailing space switches to an exact match — <em>museum</em> and <em>musette</em> drop away.' },
+    { type: 'ran', cap: 'Inflection search: <em>ran</em> resolves to <em>run</em> before you finish typing.' },
+  ];
+  (async function typewriter() {
+    if (reduced) return;
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    let q = '';
+    for (;;) {
+      for (const step of SCRIPT) {
+        for (const ch of step.type) { q += ch; searchRender(q); await wait(ch === ' ' ? 400 : 110 + Math.random() * 90); }
+        $('scap').innerHTML = step.cap;
+        await wait(2400);
+        if (step.type !== 'muse') { while (q.length) { q = q.slice(0, -1); searchRender(q); await wait(45); } await wait(500); }
+      }
+    }
+  })();
+
+  // ---- Reader: tap a word, the peek panel follows ----
+  const PEEK = {
+    pewter:    { ipa: '/ˈpjuːtə/', pos: 'noun', def: '1 &nbsp;A grey alloy of tin with copper and antimony (formerly lead). &nbsp;2 &nbsp;The dull grey colour of it.' },
+    lambent:   { ipa: '/ˈlæmbənt/', pos: 'adjective', def: '1 &nbsp;Of light or flame: playing lightly over a surface; flickering, softly glowing. &nbsp;2 &nbsp;Of wit: brilliant in a light, effortless way.' },
+    taciturn:  { ipa: '/ˈtæsɪtɜːn/', pos: 'adjective', def: '1 &nbsp;Habitually silent; reserved in speech.' },
+    stint:     { ipa: '/stɪnt/', pos: 'verb · noun', def: '1 &nbsp;To be sparing or frugal with. &nbsp;2 &nbsp;A fixed period spent at a task.' },
+    garrulous: { ipa: '/ˈɡærələs/', pos: 'adjective', def: '1 &nbsp;Excessively talkative, especially about trivial things.' },
+    halyards:  { hw: 'halyard', lem: '← halyards', ipa: '/ˈhæljəd/', pos: 'noun', def: '1 &nbsp;A rope used to raise or lower a sail, flag or yard.' },
+    thrumming: { hw: 'thrum', lem: '← thrumming', ipa: '/θrʌm/', pos: 'verb', def: '1 &nbsp;To make a continuous low humming or vibrating sound. &nbsp;2 &nbsp;To strum idly.' },
+    saturnine: { ipa: '/ˈsætənaɪn/', pos: 'adjective', def: '1 &nbsp;Gloomy, sluggish, or sardonic in temperament. &nbsp;2 &nbsp;Of or relating to lead, or lead poisoning.' },
+    demur:     { ipa: '/dɪˈmɜː/', pos: 'verb · noun', def: '1 &nbsp;To raise objections; to hesitate or show reluctance. &nbsp;2 &nbsp;An objection: <em>without demur</em>.' },
+  };
+  document.querySelectorAll('.page .rw').forEach(el => {
+    const go = () => {
+      const d = PEEK[el.dataset.w]; if (!d) return;
+      document.querySelectorAll('.page .rw.cur').forEach(n => n.classList.remove('cur'));
+      el.classList.add('cur');
+      $('pk-hw').textContent = d.hw || el.dataset.w;
+      $('pk-ipa').textContent = d.ipa; $('pk-pos').textContent = d.pos; $('pk-lem').textContent = d.lem || '';
+      $('pk-def').innerHTML = d.def;
+      const pk = $('peek'); pk.classList.remove('swap'); void pk.offsetWidth; pk.classList.add('swap');
+    };
+    el.addEventListener('click', go);
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+  });
+
+  // ---- Crack the word: reveal one more letter per tap, never the last ----
+  const WORD = 'abstruse';
+  const tiles = [...$('tiles').children];
+  $('tiles').addEventListener('click', () => {
+    const hidden = tiles.map((t, i) => t.classList.contains('on') ? -1 : i).filter(i => i >= 0);
+    if (hidden.length <= 1) { $('tilecap').textContent = '7 of 8 revealed · the last one is yours'; return; }
+    const i = hidden[Math.floor(Math.random() * hidden.length)];
+    tiles[i].textContent = WORD[i]; tiles[i].classList.add('on');
+    $('tilecap').textContent = (8 - hidden.length + 1) + ' of 8 revealed · tap a tile for one more · 🎲';
+  });
+
+  // ---- Where does it belong ----
+  document.querySelectorAll('.opt').forEach(o => {
+    const pick = () => {
+      document.querySelectorAll('.opt').forEach(x => x.classList.remove('pick', 'wrong'));
+      o.classList.add(o.dataset.ok === '1' ? 'pick' : 'wrong');
+    };
+    o.addEventListener('click', pick);
+    o.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+  });
+
+  // ---- Crossword: click a square, type; the cursor skips filled squares ----
+  const xw = $('xw'), cells = [...xw.children];
+  const N = 5, black = i => cells[i].classList.contains('b');
+  let xcur = 7, across = true;
+  // the run of open cells this cell's word occupies, in the current direction
+  function wordCells(i) {
+    const step = across ? 1 : N, out = [];
+    let j = i;
+    while (true) { const k = j - step; if (k < 0 || black(k) || (across && Math.floor(k / N) !== Math.floor(i / N))) break; j = k; }
+    while (j < N * N && !black(j) && (!across || Math.floor(j / N) === Math.floor(i / N))) { out.push(j); j += step; }
+    return out;
+  }
+  function xwPaint() {
+    cells.forEach(c => c.classList.remove('w', 'c'));
+    wordCells(xcur).forEach(i => cells[i].classList.add('w'));
+    cells[xcur].classList.add('c');
+  }
+  cells.forEach((c, i) => c.addEventListener('click', () => { if (black(i)) return; if (i === xcur) across = !across; xcur = i; xwPaint(); xw.focus({ preventScroll: true }); }));
+  function xwAdvance() {
+    const w = wordCells(xcur), from = w.indexOf(xcur);
+    for (let k = from + 1; k < w.length; k++) if (!cells[w[k]].textContent.trim()) { xcur = w[k]; return; }
+  }
+  function xwMove(d) { let i = xcur + d; while (i >= 0 && i < N * N && black(i)) i += d; if (i >= 0 && i < N * N) xcur = i; }
+  xw.addEventListener('keydown', e => {
+    if (/^[a-z]$/i.test(e.key)) { cells[xcur].textContent = e.key.toLowerCase(); xwAdvance(); xwPaint(); e.preventDefault(); }
+    else if (e.key === 'Backspace') { cells[xcur].textContent = ''; xwPaint(); e.preventDefault(); }
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { across = true; xwMove(e.key === 'ArrowRight' ? 1 : -1); xwPaint(); e.preventDefault(); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { across = false; xwMove(e.key === 'ArrowDown' ? N : -N); xwPaint(); e.preventDefault(); }
+  });
+  cells.forEach(c => { if (c.innerHTML.trim() === '&nbsp;') c.textContent = ''; });
+  xwPaint();
+
+  // ---- Word Hunt: trace LAMBENT on a loop, only while on screen ----
+  (async function huntLoop() {
+    if (reduced) return;
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const board = document.querySelector('.hunt');
+    const tilesByStep = [...board.querySelectorAll('.tr')].sort((a, b) => +a.style.getPropertyValue('--i') - +b.style.getPropertyValue('--i'));
+    const line = board.querySelector('polyline');
+    const def = document.querySelector('.hunt-def');
+    let visible = true, resume = null;
+    new IntersectionObserver(([e]) => { visible = e.isIntersecting; if (visible && resume) { resume(); resume = null; } }, { threshold: 0.3 }).observe(board);
+    const whenVisible = () => visible ? Promise.resolve() : new Promise(r => { resume = r; });
+    await wait(2600);
+    for (;;) {
+      await whenVisible();
+      // clear
+      def.classList.add('hide');
+      line.style.opacity = '0';
+      tilesByStep.forEach(t => t.classList.remove('lit'));
+      await wait(900);
+      line.style.opacity = '';
+      // draw: one segment per 350 ms, and light each tile as the line reaches it
+      const seg = 350, draw = line.animate([{ strokeDashoffset: 1 }, { strokeDashoffset: 0 }], { duration: seg * (tilesByStep.length - 1), easing: 'linear', fill: 'forwards' });
+      // light tiles off the line's own clock, so they stay in step even if timers are throttled
+      await new Promise(done => {
+        const tick = () => {
+          const n = Math.min(tilesByStep.length, Math.floor((draw.currentTime || 0) / seg + 1e-6) + 1);
+          for (let i = 0; i < n; i++) tilesByStep[i].classList.add('lit');
+          if (n >= tilesByStep.length) done(); else requestAnimationFrame(tick);
+        };
+        tick();
+      });
+      def.classList.remove('hide');
+      await wait(3800);
+    }
+  })();
+</script>
+</body>
+</html>

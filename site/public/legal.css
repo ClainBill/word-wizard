@@ -1,0 +1,40 @@
+:root {
+  --paper: #E9EAE0; --surface: #F5F5EF; --ink: #1E2A22; --ink-2: #5B665F; --ink-3: #8A948C;
+  --rule: #C9CCBE; --ochre: #8A5A22; --moss: #35604F;
+  --display: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --body: "Newsreader", "Iowan Old Style", Georgia, "Times New Roman", serif;
+  --ui: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #14170F; --surface: #1B1F17; --ink: #EDEBDF; --ink-2: #A6AA9A; --ink-3: #737A6C;
+    --rule: #33382C; --ochre: #D3A45C; --moss: #7FBBA0;
+  }
+}
+* { box-sizing: border-box; }
+html { background: var(--paper); color: var(--ink); }
+body { margin: 0; font-family: var(--body); font-size: 18px; line-height: 1.6; }
+.top, .doc, .foot { max-width: 68ch; margin-inline: auto; padding-inline: 16px; }
+.top { padding-block: 22px 0; font-family: var(--ui); font-size: 14px; }
+.top a, .foot a { color: var(--ink-2); text-decoration: none; }
+.top a:hover, .foot a:hover { color: var(--ochre); text-decoration: underline; }
+.doc { padding-block: 24px 40px; }
+.doc h1 { font-family: var(--display); font-weight: 600; font-size: clamp(30px, 5vw, 42px); line-height: 1.1; margin: 0 0 12px; letter-spacing: -0.01em; }
+.doc h2 { font-family: var(--display); font-weight: 600; font-size: 24px; margin: 36px 0 10px; }
+.doc h3 { font-family: var(--ui); font-weight: 600; font-size: 15px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-2); margin: 28px 0 8px; }
+.doc p, .doc li { max-width: 68ch; }
+.doc p { margin: 0 0 14px; }
+.doc em { font-style: italic; }
+.doc p.updated em { color: var(--ink-3); font-family: var(--ui); font-style: normal; font-size: 14px; }
+.doc a { color: var(--ochre); }
+.doc ul, .doc ol { padding-left: 1.4em; margin: 0 0 14px; }
+.doc li { margin-bottom: 6px; }
+.doc blockquote { margin: 0 0 14px; padding-left: 14px; border-left: 3px solid var(--rule); color: var(--ink-2); }
+.doc code { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+.doc table { border-collapse: collapse; margin: 0 0 14px; font-size: 16px; }
+.doc th, .doc td { border: 1px solid var(--rule); padding: 6px 10px; text-align: left; vertical-align: top; }
+.doc label { display: block; margin-top: 16px; font-family: var(--ui); font-weight: 600; font-size: 14px; }
+.doc input, .doc textarea { width: 100%; padding: 10px; margin-top: 6px; font: inherit; font-size: 16px; color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+.doc button { margin-top: 16px; padding: 10px 18px; font-family: var(--ui); font-weight: 600; font-size: 15px; color: #F4F1E6; background: var(--moss); border: 0; border-radius: 8px; cursor: pointer; }
+.doc .note { color: var(--ink-2); font-size: 16px; }
+.foot { border-top: 1px solid var(--rule); padding-block: 20px 48px; font-family: var(--ui); font-size: 13px; color: var(--ink-2); }

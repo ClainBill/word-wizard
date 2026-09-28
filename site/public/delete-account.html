@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delete your account — Word Wizard</title>
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" href="/favicon-96.png" type="image/png" sizes="96x96">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<!--
+  Google Play requires a way to request account deletion from outside the
+  app; the Play listing links here. Adapted from supabase/web/delete-account.html.
+  SUPABASE_URL / SUPABASE_ANON_KEY below match lib/app/environment.dart —
+  swap them for the prod project once it exists.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&family=Instrument+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/legal.css">
+<style>#done, #fail { display: none; margin-top: 16px; }</style>
+</head>
+<body>
+<header class="top"><a class="brand" href="/">← Word Wizard</a></header>
+<main class="doc">
+<h1>Delete your Word Wizard account</h1>
+<p><strong>The quickest way is in the app:</strong> Settings → Account → <em>Delete account</em>. That removes your account immediately.</p>
+<p>If you no longer have the app, request deletion here. We'll confirm with the address you enter, then delete the account and everything stored with it — your profile, subscription record and AI usage history. Everything you studied lives on your device and goes when you uninstall the app.</p>
+<p class="note">Deleting your account does <strong>not</strong> cancel an App Store or Google Play subscription. Cancel that in your store's subscription settings, or it will keep renewing.</p>
+<form id="form">
+  <label for="email">Email address of the account</label>
+  <input id="email" name="email" type="email" required autocomplete="email">
+  <label for="note">Anything we should know (optional)</label>
+  <textarea id="note" name="note" rows="3"></textarea>
+  <button type="submit">Request deletion</button>
+</form>
+<p id="done">Thanks — we've received your request and will email you to confirm before deleting the account.</p>
+<p id="fail">That didn't go through. Please email <a href="mailto:willcharlesgill@gmail.com">willcharlesgill@gmail.com</a> instead.</p>
+</main>
+<footer class="foot"><a href="/privacy">Privacy policy</a> · <a href="/terms">Terms of use</a> · <a href="/delete-account">Delete your account</a></footer>
+<script>
+  // Public by design (same values the app ships with). Dev project until prod exists.
+  const SUPABASE_URL = "https://pnbenhthybmszavtonrj.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBuYmVuaHRoeWJtc3phdnRvbnJqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2MTM2NTMsImV4cCI6MjEwNTE4OTY1M30.gRVa79LCVg5wgECOTDksIQ6Qn1p2GR21B2s0-XxbiyE";
+
+  document.getElementById("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      email: document.getElementById("email").value,
+      note: document.getElementById("note").value,
+    };
+    try {
+      const r = await fetch(`${SUPABASE_URL}/functions/v1/delete-account`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_ANON_KEY,
+          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify(body),
+      });
+      const ok = r.ok && (await r.json()).ok;
+      document.getElementById("form").style.display = ok ? "none" : "";
+      document.getElementById(ok ? "done" : "fail").style.display = "block";
+    } catch {
+      document.getElementById("fail").style.display = "block";
+    }
+  });
+</script>
+</body>
+</html>

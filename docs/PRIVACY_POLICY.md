@@ -1,10 +1,10 @@
 # Word Wizard privacy policy
 
-> **Draft — describes the app as it is today (no accounts, no backend).**
-> Review before publishing, and revise when accounts, premium, friends or
-> group puzzles ship: each of those adds data this policy does not yet cover.
+> **Draft — covers accounts, Premium, ads, the AI gateway, groups and the
+> leaderboard (27 Sept 2026).** Have it reviewed before launch, and revise
+> when friends or any new server feature ships.
 
-*Last updated: 15 September 2026*
+*Last updated: 27 September 2026*
 
 Word Wizard is an offline dictionary, flashcard and word-game app made by
 William Gill. This page explains what the app does with your data. The short
@@ -13,7 +13,7 @@ without you doing something that visibly sends it.
 
 ## What stays on your device
 
-Everything you do in the app is stored only on your phone:
+What you do in the app is stored on your phone:
 
 - the words you look up, save and study, your review history and study
   settings;
@@ -22,8 +22,10 @@ Everything you do in the app is stored only on your phone:
 - your crossword and Word Hunt puzzles, progress, scores and times;
 - your reminder settings.
 
-Word Wizard has no user accounts and no server of its own. We have no way to see
-any of this. Deleting the app deletes it all. The app's standard backup
+None of this is sent to Word Wizard's server, and we have no way to see it —
+except the few things described under *Accounts*, *Purchases*, *Groups* and
+*Leaderboard* below, and only if you use those features. Deleting the app
+deletes everything stored on your phone. The app's standard backup
 behaviour on your platform (Google or iCloud device backup) may include this
 data, under your platform's own terms.
 
@@ -48,23 +50,29 @@ platform, subject to [Google's privacy policy](https://policies.google.com/priva
 Reports are kept as long as needed to act on them. Nothing is sent unless you
 press *Send*; a report written offline waits on your device until it can go.
 
-**Optional AI features.** Two features can use an AI model from OpenAI, and
-only if you have pasted your own OpenAI API key into Settings:
+**AI features.** Two Premium features use an AI model from OpenAI:
 
 - the crossword *AI editor*, which sends a finished puzzle's answers and
   clues to be rewritten;
 - the *guess from the clues* recall game, which sends a study word and its
   dictionary definition to get hints written.
 
-What is sent is dictionary content and puzzle content, not your notes or
-reading. It is sent directly from your device to OpenAI under your own key
-and [OpenAI's API terms and privacy policy](https://openai.com/policies).
-Your key is stored in your device's secure keystore and is never sent
-anywhere but to OpenAI. Without a key these features are simply switched
-off, and the app works fully without them.
+What is sent is dictionary content and puzzle content, never your notes or
+reading. When you're signed in, the request goes to Word Wizard's server,
+which passes it to OpenAI under our own key; OpenAI processes it under
+[its API terms and privacy policy](https://openai.com/policies). Our server
+keeps a record of each request — what kind it was, the result and what it
+cost — tied to your account, so that daily limits apply and a repeated
+request isn't charged twice. Deleting your account deletes these records.
 
-**Nothing else.** Word Wizard has no analytics, no advertising, no crash
-reporting service and no tracking of any kind. It does not read your
+Alternatively, you can paste your own OpenAI API key into Settings. Requests
+then go directly from your device to OpenAI under your key, which is stored
+in your device's secure keystore and never sent anywhere but to OpenAI.
+Without an account or a key these features are switched off, and the rest
+of the app works fully without them.
+
+**Nothing else.** Word Wizard has no analytics, no crash reporting service
+and no tracking beyond the advertising described below. It does not read your
 contacts, location, camera or microphone. The photo library is opened only
 when you tap *Add a photo* on a bug report, and only the photo you pick is
 used.
@@ -84,15 +92,19 @@ collect personal data from anyone, children included.
 
 - Turn reminders off in Settings.
 - Remove your OpenAI key in Settings to switch the AI features off.
-- Delete the app to delete everything it stores.
+- Back up your lists, study progress and notes to a file (Settings → Your
+  data). The file goes only where you choose to save it — your phone, or a
+  cloud drive of your own — and we never see it.
+- Delete your account in Settings → Account to remove what our server holds.
+- Delete the app to delete everything it stores on your phone.
 - Ask for a bug report you sent to be deleted by writing to the address
   below.
 
 ## Changes
 
-If Word Wizard gains accounts, sync, purchases or social features, this policy
-will change to say exactly what data those involve, and the app will show
-the new version before any such data is collected.
+If Word Wizard starts collecting anything not described here — for example
+when friends or sync arrive — this policy will change to say exactly what,
+and the app will show the new version before any such data is collected.
 
 ## Advertising
 

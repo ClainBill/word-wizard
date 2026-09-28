@@ -4,7 +4,7 @@
 > accounts and Premium purchases; extend it when shared puzzles arrive
 > (acceptable-use rules for user-visible names and shared content).
 
-*Last updated: 15 September 2026*
+*Last updated: 27 September 2026*
 
 These terms apply to the Word Wizard app ("the app"), made by William Gill
 ("we"). By installing or using the app you agree to them. The app store you
@@ -13,9 +13,10 @@ got the app from has its own terms, which also apply.
 ## The app
 
 Word Wizard is a dictionary, flashcard and word-game app for learning English
-vocabulary. It works offline. Some optional features can use an AI model
-through your own OpenAI account; those are subject to OpenAI's terms, and any
-cost they incur is between you and OpenAI.
+vocabulary. Its dictionary, flashcards and puzzles work offline. Some
+Premium features use an AI model from OpenAI through our server. If you
+choose instead to use your own OpenAI key, those requests are subject to
+OpenAI's terms, and any cost they incur is between you and OpenAI.
 
 ## Licence to use it
 
@@ -33,7 +34,7 @@ listed in the app under Settings → About → *Data sources & licences*. Those
 licences govern that content, not these terms.
 
 Your own words, notes and readings stay yours. We claim no rights in them,
-and they stay on your device.
+and they stay on your device unless you choose to share words with a group.
 
 ## Premium and purchases
 
