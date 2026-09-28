@@ -11,6 +11,7 @@ import '../../domain/crossword/crossword_models.dart';
 import '../../domain/crossword/editorial.dart';
 import '../../domain/crossword/generator.dart';
 import '../../domain/crossword/history.dart';
+import '../../domain/games/daily_limit.dart';
 import '../../domain/models/study_card.dart';
 import '../../domain/models/study_direction.dart';
 import '../../domain/srs/sm2.dart';
@@ -190,14 +191,40 @@ class CrosswordRepository {
     return '$y-$m-$d';
   }
 
-  /// The newest puzzle generated for a day, or null if there is none.
+  /// Whether a row is this person's own puzzle rather than a group's: a
+  /// group puzzle is imported under today's date like any other, but is
+  /// never "today's Mini" and never counts against the daily allowance.
+  Expression<bool> _ownPuzzle($CrosswordPuzzlesTable t) => t.id.isNotInQuery(
+        _db.selectOnly(_db.groupPuzzleLinks)
+          ..addColumns([_db.groupPuzzleLinks.localPuzzleId])
+          ..where(_db.groupPuzzleLinks.kind.equals('crossword')),
+      );
+
+  /// The newest of this person's own puzzles for a day, or null if there
+  /// is none.
   Future<CrosswordPuzzleRow?> _latestRow(CrosswordDifficulty difficulty, String date) {
     return (_db.select(_db.crosswordPuzzles)
-          ..where((t) => t.puzzleDate.equals(date) & t.difficulty.equals(difficulty.storageKey))
+          ..where((t) =>
+              t.puzzleDate.equals(date) & t.difficulty.equals(difficulty.storageKey) & _ownPuzzle(t))
           ..orderBy([(t) => OrderingTerm.desc(t.id)])
           ..limit(1))
         .getSingleOrNull();
   }
+
+  /// How many of this person's own puzzles at [difficulty] exist for today.
+  Future<int> puzzlesToday(CrosswordDifficulty difficulty) async {
+    final count = _db.crosswordPuzzles.id.count();
+    final query = _db.selectOnly(_db.crosswordPuzzles)
+      ..addColumns([count])
+      ..where(_db.crosswordPuzzles.puzzleDate.equals(today()) &
+          _db.crosswordPuzzles.difficulty.equals(difficulty.storageKey) &
+          _ownPuzzle(_db.crosswordPuzzles));
+    return (await query.getSingle()).read(count) ?? 0;
+  }
+
+  /// Whether "Start new" may make another puzzle at [difficulty] today.
+  Future<bool> canStartNew(CrosswordDifficulty difficulty) async =>
+      await puzzlesToday(difficulty) < puzzlesPerDay;
 
   Future<CrosswordSession> _sessionFromRow(CrosswordPuzzleRow row) async {
     final event = await (_db.select(_db.crosswordSolveEvents)
@@ -338,7 +365,13 @@ class CrosswordRepository {
   /// what regenerating actually changed. It used to be deleted, and then a
   /// second generation was indistinguishable from the first ever having
   /// happened.
-  Future<CrosswordSession?> regenerate(CrosswordDifficulty difficulty) {
+  ///
+  /// At most [puzzlesPerDay] a day per size, counting the day's own: past
+  /// that it throws [DailyPuzzleLimitReached].
+  Future<CrosswordSession?> regenerate(CrosswordDifficulty difficulty) async {
+    if (!await canStartNew(difficulty)) {
+      throw DailyPuzzleLimitReached(difficulty.label);
+    }
     // A fresh random seed rather than the day's deterministic one, so "Start
     // new" actually produces a different puzzle.
     return _generateAndSave(difficulty, today(), seed: _rand.nextInt(1 << 30));
@@ -779,12 +812,19 @@ class CrosswordRepository {
   /// Always reports what happened, including the reasons it did nothing:
   /// silence is indistinguishable from a broken key, and the whole point of
   /// the debug switch is being able to tell.
+  ///
+  /// [groupKey] marks a group's daily puzzle, reviewed by its builder
+  /// before it's published: it names the puzzle to the backend (the same
+  /// key on a retry is served from cache), spends the builder's group
+  /// allowance instead of a personal puzzle, and leaves this person's own
+  /// answer history and ban list out of it — the grid is everyone's.
   Future<CrosswordReviewReport> reviewInBackground(
     int puzzleId,
     CrosswordDifficulty difficulty,
     String date,
-    CrosswordPuzzle puzzle,
-  ) async {
+    CrosswordPuzzle puzzle, {
+    String? groupKey,
+  }) async {
     const nothing = (revised: null, run: null);
     if (puzzle.reviewed) return (revised: null, status: 'already_reviewed', run: null);
     if (!reviewConfigured) return (revised: null, status: 'no_key', run: null);
@@ -809,7 +849,9 @@ class CrosswordRepository {
       final result = await _reviewService.review(
         puzzle,
         weekday: weekday,
-        puzzleKey: 'puzzle-$puzzleId-${puzzle.seed}',
+        puzzleKey: groupKey ?? 'puzzle-$puzzleId-${puzzle.seed}',
+        difficulty: difficulty,
+        group: groupKey != null,
       );
       final verdict = result.verdict;
 
@@ -834,18 +876,20 @@ class CrosswordRepository {
       // they stay out of future puzzles even if this grid can't lose them.
       final byId = {for (final w in puzzle.words) w.slotId: w};
       final anchors = puzzle.anchors.toSet();
-      await _banAnswers(difficulty, {
-        for (final ban in verdict.bannedAnswers.entries)
-          if (byId[ban.key] != null && !anchors.contains(byId[ban.key]!.answer))
-            byId[ban.key]!.answer: ban.value,
-      });
+      if (groupKey == null) {
+        await _banAnswers(difficulty, {
+          for (final ban in verdict.bannedAnswers.entries)
+            if (byId[ban.key] != null && !anchors.contains(byId[ban.key]!.answer))
+              byId[ban.key]!.answer: ban.value,
+        });
+      }
 
       final revision = await _runReviseInIsolate(CrosswordRevisionRequest(
         wordListSource: await _loadWordList(),
         puzzle: puzzle,
         verdict: verdict,
         blockedAnswers: {
-          ...await _blockedAnswers(difficulty),
+          if (groupKey == null) ...await _blockedAnswers(difficulty),
           ...await _bannedAnswerSet(),
         },
         seed: puzzle.seed,

@@ -1,7 +1,25 @@
 /// Group puzzles, v1.1 — see docs/Group Puzzles v1.1.md. A group pools
 /// the headwords its members chose to share; each day that pool anchors
-/// one crossword every member solves on their own copy.
+/// one puzzle every member solves on their own copy — a crossword at the
+/// size the group chose, or a Word Hunt board.
 library;
+
+import '../crossword/crossword_models.dart';
+
+/// What a group plays every day. Chosen when the group is made and fixed
+/// after (the server refuses a change).
+enum GroupPuzzleKind {
+  crossword('crossword', 'Crossword'),
+  hunt('hunt', 'Word Hunt');
+
+  /// The value the server stores (`groups.puzzle_kind`, `group_puzzles.kind`).
+  final String storageKey;
+  final String label;
+  const GroupPuzzleKind(this.storageKey, this.label);
+
+  static GroupPuzzleKind fromStorageKey(String? key) =>
+      values.where((k) => k.storageKey == key).firstOrNull ?? crossword;
+}
 
 class Group {
   final String id;
@@ -9,6 +27,10 @@ class Group {
   final String ownerId;
   final String inviteCode;
   final DateTime createdAt;
+  final GroupPuzzleKind puzzleKind;
+
+  /// The crossword size, when [puzzleKind] is a crossword.
+  final CrosswordDifficulty crosswordSize;
 
   /// Filled by the list query: how many people, and whether this is mine.
   final int memberCount;
@@ -19,10 +41,24 @@ class Group {
     required this.ownerId,
     required this.inviteCode,
     required this.createdAt,
+    this.puzzleKind = GroupPuzzleKind.crossword,
+    this.crosswordSize = CrosswordDifficulty.midi,
     this.memberCount = 0,
   });
 
   bool isOwnedBy(String userId) => ownerId == userId;
+
+  /// "Mini crossword", "Word Hunt" — what the group plays, in a phrase.
+  String get playsLabel => switch (puzzleKind) {
+    GroupPuzzleKind.crossword => '${crosswordSize.label} crossword',
+    GroupPuzzleKind.hunt => 'Word Hunt',
+  };
+
+  /// The `group_puzzles.difficulty` a puzzle of this group carries.
+  String get puzzleDifficulty => switch (puzzleKind) {
+    GroupPuzzleKind.crossword => crosswordSize.storageKey,
+    GroupPuzzleKind.hunt => 'daily',
+  };
 
   static Group fromJson(Map<String, dynamic> json) => Group(
     id: json['id'] as String,
@@ -30,6 +66,11 @@ class Group {
     ownerId: json['owner_id'] as String,
     inviteCode: json['invite_code'] as String,
     createdAt: DateTime.tryParse(json['created_at'] as String? ?? '') ?? DateTime.now(),
+    puzzleKind: GroupPuzzleKind.fromStorageKey(json['puzzle_kind'] as String?),
+    crosswordSize: CrosswordDifficulty.values
+            .where((d) => d.storageKey == json['crossword_size'])
+            .firstOrNull ??
+        CrosswordDifficulty.midi,
     memberCount: switch (json['group_members']) {
       final List<dynamic> rows =>
         rows.isNotEmpty && rows.first is Map && (rows.first as Map).containsKey('count')
@@ -97,6 +138,8 @@ class GroupPuzzle {
   final List<String> anchors;
   final String? generatedBy;
 
+  GroupPuzzleKind get puzzleKind => GroupPuzzleKind.fromStorageKey(kind);
+
   const GroupPuzzle({
     required this.id,
     required this.groupId,
@@ -130,6 +173,10 @@ class GroupScore {
   final bool completed;
   final int activeMs;
   final bool aided;
+
+  /// The play's leaderboard points (lib/domain/games/scoring.dart) — what
+  /// the group's standings add up.
+  final int points;
   final DateTime updatedAt;
 
   const GroupScore({
@@ -140,6 +187,7 @@ class GroupScore {
     required this.completed,
     required this.activeMs,
     required this.aided,
+    this.points = 0,
     required this.updatedAt,
   });
 
@@ -151,6 +199,7 @@ class GroupScore {
     completed: json['completed'] == true,
     activeMs: (json['active_ms'] as num?)?.toInt() ?? 0,
     aided: json['aided'] == true,
+    points: (json['points'] as num?)?.toInt() ?? 0,
     updatedAt: DateTime.tryParse(json['updated_at'] as String? ?? '') ?? DateTime.now(),
   );
 
@@ -162,11 +211,88 @@ class GroupScore {
     'completed': completed,
     'active_ms': activeMs,
     'aided': aided,
+    'points': points,
   };
 
   /// The "solved/total/completed" stamp the link row keeps to skip
   /// re-uploading an unchanged score.
-  String get stamp => '$solvedWords/$totalWords/$completed/$aided';
+  String get stamp => '$solvedWords/$totalWords/$completed/$aided/$points';
+}
+
+/// One member's line on the group's standings: points summed over the
+/// group's puzzles in a period.
+class GroupStanding {
+  final int rank;
+  final String userId;
+  final String displayName;
+  final int points;
+  final int puzzles;
+  final int completed;
+  final bool isMe;
+
+  const GroupStanding({
+    required this.rank,
+    required this.userId,
+    required this.displayName,
+    required this.points,
+    required this.puzzles,
+    required this.completed,
+    required this.isMe,
+  });
+
+  static GroupStanding fromJson(Map<String, dynamic> json) => GroupStanding(
+    rank: (json['rank'] as num).toInt(),
+    userId: json['user_id'] as String,
+    displayName: json['display_name'] as String? ?? 'Someone',
+    points: (json['points'] as num?)?.toInt() ?? 0,
+    puzzles: (json['puzzles'] as num?)?.toInt() ?? 0,
+    completed: (json['completed'] as num?)?.toInt() ?? 0,
+    isMe: json['is_me'] == true,
+  );
+}
+
+/// The most groups one person can be in, owned or joined. The server
+/// enforces it (`group_create`, `group_join`); the app says so up front.
+const int maxGroupsPerPerson = 5;
+
+/// Who's building today's group puzzle, as `group_claim_build` answers.
+enum GroupBuildStatus { published, claimed, building }
+
+class GroupBuildClaim {
+  final GroupBuildStatus status;
+
+  /// When someone else is building: their name in the group.
+  final String? by;
+
+  const GroupBuildClaim(this.status, {this.by});
+
+  static GroupBuildClaim fromJson(Map<String, dynamic> json) => GroupBuildClaim(
+    switch (json['status']) {
+      'published' => GroupBuildStatus.published,
+      'building' => GroupBuildStatus.building,
+      _ => GroupBuildStatus.claimed,
+    },
+    by: json['by'] as String?,
+  );
+}
+
+/// The periods the group standings can cover.
+enum GroupStandingsPeriod {
+  week('This week'),
+  allTime('All time');
+
+  final String label;
+  const GroupStandingsPeriod(this.label);
+
+  /// The first day counted, as YYYY-MM-DD, or null for all time. A week
+  /// starts on Monday, as the global board's does.
+  String? since(DateTime now) {
+    if (this == allTime) return null;
+    final monday = DateTime(now.year, now.month, now.day).subtract(Duration(days: now.weekday - 1));
+    return '${monday.year.toString().padLeft(4, '0')}-'
+        '${monday.month.toString().padLeft(2, '0')}-'
+        '${monday.day.toString().padLeft(2, '0')}';
+  }
 }
 
 /// Leaderboard order: finished first, then most words, then quickest;

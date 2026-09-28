@@ -6,13 +6,12 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../app/providers.dart';
 import '../../domain/groups/group_models.dart';
-import '../../services/group_puzzle_service.dart';
 import '../../services/groups_api.dart';
 import '../premium/paywall_screen.dart';
 
-/// One group: today's puzzle and who's done how well, the words you're
-/// contributing (with the consent switch), the members, the invite code,
-/// and the way out.
+/// One group: today's puzzle and who's done how well, the standings over
+/// the week and all time, the words you're contributing (with the consent
+/// switch), the members, the invite code, and the way out.
 class GroupScreen extends ConsumerStatefulWidget {
   final String groupId;
 
@@ -24,7 +23,9 @@ class GroupScreen extends ConsumerStatefulWidget {
 
 class _GroupScreenState extends ConsumerState<GroupScreen> {
   bool _opening = false;
+  String? _buildStatus;
   bool _syncing = false;
+  GroupStandingsPeriod _period = GroupStandingsPeriod.week;
 
   @override
   void initState() {
@@ -55,6 +56,9 @@ class _GroupScreenState extends ConsumerState<GroupScreen> {
     final puzzle = ref.read(groupTodayPuzzleProvider(widget.groupId)).valueOrNull;
     if (puzzle != null) ref.invalidate(groupScoresProvider(puzzle.id));
     ref.invalidate(groupTodayPuzzleProvider(widget.groupId));
+    for (final period in GroupStandingsPeriod.values) {
+      ref.invalidate(groupStandingsProvider((widget.groupId, period)));
+    }
   }
 
   @override
@@ -102,19 +106,41 @@ class _GroupScreenState extends ConsumerState<GroupScreen> {
               padding: const EdgeInsets.all(20),
               children: [
                 _TodayCard(
+                  group: group,
                   puzzle: puzzle,
                   poolSize: pool?.length,
                   opening: _opening,
+                  status: _buildStatus,
                   premium: premium,
-                  onPlay: () => premium ? _play() : showPaywall(context, source: 'group_play'),
+                  onPlay: () => premium ? _play(group) : showPaywall(context, source: 'group_play'),
                 ),
                 const SizedBox(height: 16),
                 if (puzzle != null) ...[
-                  Text('Today\'s leaderboard', style: Theme.of(context).textTheme.titleMedium),
+                  Text('Today', style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 8),
                   _Leaderboard(puzzleId: puzzle.id, members: members, me: user?.id),
                   const SizedBox(height: 16),
                 ],
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text('Leaderboard', style: Theme.of(context).textTheme.titleMedium),
+                    ),
+                    SegmentedButton<GroupStandingsPeriod>(
+                      showSelectedIcon: false,
+                      style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                      segments: [
+                        for (final p in GroupStandingsPeriod.values)
+                          ButtonSegment(value: p, label: Text(p.label)),
+                      ],
+                      selected: {_period},
+                      onSelectionChanged: (s) => setState(() => _period = s.first),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                _Standings(groupId: widget.groupId, period: _period),
+                const SizedBox(height: 16),
                 Text('Your words', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 4),
                 SwitchListTile(
@@ -213,20 +239,35 @@ class _GroupScreenState extends ConsumerState<GroupScreen> {
     );
   }
 
-  Future<void> _play() async {
+  Future<void> _play(Group group) async {
     setState(() => _opening = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final localId = await ref.read(groupPuzzleServiceProvider).openToday(widget.groupId);
+      final local = await ref
+          .read(groupPuzzleServiceProvider)
+          .openToday(
+            group,
+            onStatus: (status) {
+              if (mounted) setState(() => _buildStatus = status);
+            },
+          );
+      if (mounted) setState(() => _buildStatus = null);
+      ref.invalidate(groupTodayPuzzleProvider(widget.groupId));
       if (!mounted) return;
-      await context.push(
-        '/games/crossword/${GroupPuzzleService.difficulty.storageKey}?puzzle=$localId',
-      );
+      await context.push(switch (local.kind) {
+        GroupPuzzleKind.crossword => '/games/crossword/${local.size.storageKey}?puzzle=${local.localId}',
+        GroupPuzzleKind.hunt => '/games/hunt?puzzle=${local.localId}',
+      });
       if (mounted) _syncInBackground();
     } on GroupsException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } finally {
-      if (mounted) setState(() => _opening = false);
+      if (mounted) {
+        setState(() {
+          _opening = false;
+          _buildStatus = null;
+        });
+      }
     }
   }
 
@@ -362,16 +403,22 @@ class _GroupScreenState extends ConsumerState<GroupScreen> {
 }
 
 class _TodayCard extends StatelessWidget {
+  final Group group;
   final GroupPuzzle? puzzle;
   final int? poolSize;
   final bool opening;
+
+  /// What building today's puzzle is up to, while it's being built.
+  final String? status;
   final bool premium;
   final VoidCallback onPlay;
 
   const _TodayCard({
+    required this.group,
     required this.puzzle,
     required this.poolSize,
     required this.opening,
+    this.status,
     required this.premium,
     required this.onPlay,
   });
@@ -389,21 +436,36 @@ class _TodayCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(Icons.grid_on, color: scheme.primary),
+                Icon(
+                  group.puzzleKind == GroupPuzzleKind.hunt ? Icons.apps : Icons.grid_on,
+                  color: scheme.primary,
+                ),
                 const SizedBox(width: 10),
-                Text('Today\'s crossword', style: Theme.of(context).textTheme.titleMedium),
+                Expanded(
+                  child: Text(
+                    'Today\'s ${group.playsLabel}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 6),
             Text(
               ready
-                  ? 'Built on ${puzzle!.anchors.length} of the group\'s words. Everyone gets the same grid.'
+                  ? 'Built on ${puzzle!.anchors.length} of the group\'s words. Everyone gets the same '
+                        '${group.puzzleKind == GroupPuzzleKind.hunt ? 'board' : 'grid'}.'
                   : poolSize == 0
                   ? 'The pool is empty — switch on "Share my words" below to start it.'
                   : 'Nobody has opened today\'s puzzle yet. Be the first: it\'s built from the '
-                        '${poolSize ?? ''} words in the pool.',
+                        '${poolSize ?? ''} words in the pool'
+                        '${group.puzzleKind == GroupPuzzleKind.crossword ? ', and the AI editor polishes the clues' : ''}. '
+                        'One puzzle a day — everyone plays the same one.',
               style: TextStyle(color: scheme.onSurfaceVariant),
             ),
+            if (opening && status != null) ...[
+              const SizedBox(height: 8),
+              Text(status!, style: TextStyle(color: scheme.primary)),
+            ],
             const SizedBox(height: 12),
             FilledButton.icon(
               onPressed: opening ? null : onPlay,
@@ -472,7 +534,7 @@ class _Leaderboard extends ConsumerWidget {
                     subtitle: Text(
                       '${scores[i].solvedWords}/${scores[i].totalWords} words'
                       '${scores[i].completed ? ' · finished' : ''}'
-                      '${scores[i].aided ? ' · with reveals' : ''}'
+                      '${scores[i].aided ? ' · helped, no points' : ''}'
                       '${scores[i].activeMs > 0 ? ' · ${_minutes(scores[i].activeMs)}' : ''}',
                     ),
                   ),
@@ -485,5 +547,64 @@ class _Leaderboard extends ConsumerWidget {
   static String _minutes(int ms) {
     final s = ms ~/ 1000;
     return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+  }
+}
+
+/// Every member's points over the period, ranked — the same points the
+/// global board uses, summed over this group's puzzles only.
+class _Standings extends ConsumerWidget {
+  final String groupId;
+  final GroupStandingsPeriod period;
+
+  const _Standings({required this.groupId, required this.period});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    return ref
+        .watch(groupStandingsProvider((groupId, period)))
+        .when(
+          loading: () => const LinearProgressIndicator(),
+          error: (e, _) => Text('$e', style: TextStyle(color: scheme.error)),
+          data: (rows) {
+            if (rows.every((r) => r.puzzles == 0)) {
+              return Text(
+                period == GroupStandingsPeriod.week
+                    ? 'No points yet this week. Play today\'s puzzle to get on the board.'
+                    : 'No points yet. Play today\'s puzzle to get on the board.',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              );
+            }
+            return Column(
+              children: [
+                for (final r in rows)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    leading: Text(
+                      '${r.rank}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: r.rank == 1 && r.points > 0 ? scheme.primary : scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    title: Text('${r.displayName}${r.isMe ? ' (you)' : ''}'),
+                    subtitle: Text(
+                      r.puzzles == 0
+                          ? 'not played'
+                          : '${r.puzzles} ${r.puzzles == 1 ? 'puzzle' : 'puzzles'}'
+                                ' · ${r.completed} finished',
+                    ),
+                    trailing: Text(
+                      '${r.points}',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        );
   }
 }

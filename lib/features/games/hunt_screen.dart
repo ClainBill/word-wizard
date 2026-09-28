@@ -9,6 +9,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
 import '../../domain/games/active_clock.dart';
+import '../../domain/games/daily_limit.dart';
+import 'daily_limit_dialog.dart';
 import '../../data/repositories/hunt_repository.dart';
 import '../../domain/hunt/hunt_models.dart';
 import '../../domain/hunt/hunt_solver.dart' show huntNeighbours;
@@ -476,11 +478,20 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
   }
 
   Future<void> _regenerate() async {
+    final made = await _repo.boardsToday();
+    if (!mounted) return;
+    if (made >= puzzlesPerDay) {
+      await showDailyLimitDialog(context, const DailyPuzzleLimitReached('Word Hunt'));
+      return;
+    }
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('New board?'),
-        content: const Text('Today\'s board stays in history with its progress.'),
+        content: Text(
+          'Today\'s board stays in history with its progress. '
+          '${made + 1 >= puzzlesPerDay ? 'This is your last new board today.' : ''}',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -496,7 +507,12 @@ class _HuntScreenState extends ConsumerState<HuntScreen>
     if (ok != true || !mounted) return;
     _clock.stop();
     _flushPlayTime();
-    await _repo.regenerate();
+    try {
+      await _repo.regenerate();
+    } on DailyPuzzleLimitReached catch (e) {
+      if (mounted) await showDailyLimitDialog(context, e);
+      return;
+    }
     ref.invalidate(huntSessionProvider(null));
     ref.invalidate(huntHistoryProvider);
   }

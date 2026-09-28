@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 
+import '../domain/crossword/crossword_models.dart';
 import '../domain/groups/group_models.dart';
 
 /// Something the server said no to, in words for the person.
@@ -18,7 +19,14 @@ abstract class GroupsApi {
 
   Future<List<Group>> myGroups();
   Future<Group?> group(String groupId);
-  Future<String> create({required String name, required String displayName});
+  /// Starts a group that plays [kind] — at [size], for crosswords — every
+  /// day. Fixed from then on.
+  Future<String> create({
+    required String name,
+    required String displayName,
+    GroupPuzzleKind kind = GroupPuzzleKind.crossword,
+    CrosswordDifficulty size = CrosswordDifficulty.midi,
+  });
   Future<String> join({required String code, required String displayName});
   Future<void> leave(String groupId, {required String userId});
   Future<void> removeMember(String groupId, {required String userId});
@@ -51,6 +59,14 @@ abstract class GroupsApi {
 
   Future<List<GroupScore>> scores(String puzzleId);
   Future<void> submitScore(GroupScore score);
+
+  /// Asks to be the one who builds the group's puzzle for [date]: only one
+  /// member generates it (and pays for its AI edit) while the others wait.
+  Future<GroupBuildClaim> claimBuild(String groupId, {required String date, required String kind});
+
+  /// Every member's points over the group's puzzles since [since]
+  /// (YYYY-MM-DD; all time when null), ranked.
+  Future<List<GroupStanding>> standings(String groupId, {String? since});
 }
 
 class SupabaseGroupsApi implements GroupsApi {
@@ -60,6 +76,9 @@ class SupabaseGroupsApi implements GroupsApi {
 
   @override
   bool get available => true;
+
+  static const _groupColumns =
+      'id, name, owner_id, invite_code, created_at, puzzle_kind, crossword_size, group_members(count)';
 
   Future<T> _guard<T>(Future<T> Function() body) async {
     try {
@@ -75,8 +94,12 @@ class SupabaseGroupsApi implements GroupsApi {
   static String _friendly(sb.PostgrestException e) => switch (e.message) {
     'invalid_code' => 'That code doesn\'t match a group.',
     'group_full' => 'That group is full (12 people).',
-    'too_many_groups' => 'You already own ten groups.',
+    'too_many_groups' =>
+      'You\'re in $maxGroupsPerPerson groups already — the most anyone can be in. Leave one first.',
     'unauthenticated' || 'not_a_member' => 'Sign in to use groups.',
+    'wrong_puzzle_kind' =>
+      'This group plays a different puzzle than this version of the app built. Update the app and try again.',
+    'puzzle_kind_fixed' => 'What a group plays is chosen when it\'s made and can\'t be changed.',
     _ => 'The server said no: ${e.message}',
   };
 
@@ -84,7 +107,7 @@ class SupabaseGroupsApi implements GroupsApi {
   Future<List<Group>> myGroups() => _guard(() async {
     final rows = await _client
         .from('groups')
-        .select('id, name, owner_id, invite_code, created_at, group_members(count)')
+        .select(_groupColumns)
         .order('created_at');
     return [for (final r in rows) Group.fromJson(r)];
   });
@@ -93,17 +116,27 @@ class SupabaseGroupsApi implements GroupsApi {
   Future<Group?> group(String groupId) => _guard(() async {
     final row = await _client
         .from('groups')
-        .select('id, name, owner_id, invite_code, created_at, group_members(count)')
+        .select(_groupColumns)
         .eq('id', groupId)
         .maybeSingle();
     return row == null ? null : Group.fromJson(row);
   });
 
   @override
-  Future<String> create({required String name, required String displayName}) => _guard(() async {
+  Future<String> create({
+    required String name,
+    required String displayName,
+    GroupPuzzleKind kind = GroupPuzzleKind.crossword,
+    CrosswordDifficulty size = CrosswordDifficulty.midi,
+  }) => _guard(() async {
     final id = await _client.rpc(
       'group_create',
-      params: {'p_name': name, 'p_display_name': displayName},
+      params: {
+        'p_name': name,
+        'p_display_name': displayName,
+        'p_puzzle_kind': kind.storageKey,
+        'p_crossword_size': size.storageKey,
+      },
     );
     return id as String;
   });
@@ -231,6 +264,28 @@ class SupabaseGroupsApi implements GroupsApi {
   @override
   Future<void> submitScore(GroupScore score) =>
       _guard(() => _client.from('group_scores').upsert(score.toJson()));
+
+  @override
+  Future<GroupBuildClaim> claimBuild(
+    String groupId, {
+    required String date,
+    required String kind,
+  }) => _guard(() async {
+    final row = await _client.rpc(
+      'group_claim_build',
+      params: {'p_group': groupId, 'p_date': date, 'p_kind': kind},
+    );
+    return GroupBuildClaim.fromJson(Map<String, dynamic>.from(row as Map));
+  });
+
+  @override
+  Future<List<GroupStanding>> standings(String groupId, {String? since}) => _guard(() async {
+    final rows = await _client.rpc(
+      'group_leaderboard',
+      params: {'p_group': groupId, 'p_since': since},
+    );
+    return [for (final r in rows as List) GroupStanding.fromJson(Map<String, dynamic>.from(r as Map))];
+  });
 }
 
 /// No backend in this build.
@@ -245,7 +300,12 @@ class NoGroupsApi implements GroupsApi {
   @override
   Future<Group?> group(String groupId) async => null;
   @override
-  Future<String> create({required String name, required String displayName}) async => _no();
+  Future<String> create({
+    required String name,
+    required String displayName,
+    GroupPuzzleKind kind = GroupPuzzleKind.crossword,
+    CrosswordDifficulty size = CrosswordDifficulty.midi,
+  }) async => _no();
   @override
   Future<String> join({required String code, required String displayName}) async => _no();
   @override
@@ -293,4 +353,12 @@ class NoGroupsApi implements GroupsApi {
   Future<List<GroupScore>> scores(String puzzleId) async => const [];
   @override
   Future<void> submitScore(GroupScore score) async => _no();
+  @override
+  Future<GroupBuildClaim> claimBuild(
+    String groupId, {
+    required String date,
+    required String kind,
+  }) async => _no();
+  @override
+  Future<List<GroupStanding>> standings(String groupId, {String? since}) async => const [];
 }

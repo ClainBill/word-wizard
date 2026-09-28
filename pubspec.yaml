@@ -2,7 +2,7 @@ name: word_wizard
 description: "Offline advanced-English vocabulary dictionary and SRS flashcards."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.0+2
 
 environment:
   sdk: ^3.11.5
@@ -55,6 +55,7 @@ dependencies:
   google_sign_in: ^7.2.0
   sign_in_with_apple: ^8.1.0
   crypto: ^3.0.7
+  file_picker: ^13.1.0
 
 dev_dependencies:
   flutter_test:

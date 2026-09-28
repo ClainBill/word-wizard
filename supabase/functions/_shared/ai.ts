@@ -34,6 +34,12 @@ export type AiJob<I> = {
   kind: AiKind;
   parse: (body: unknown) => I | null;
   idempotencyKey: (input: I) => string;
+  /**
+   * Which allowance within the kind this spends, when the kind's limit is
+   * split (the crossword editor's is per puzzle size). Omitted, or an
+   * empty string, means the kind's whole allowance.
+   */
+  bucket?: (input: I) => string;
   build: (input: I, model: string) => Omit<ChatOptions, "model">;
 };
 
@@ -79,6 +85,7 @@ export async function runAiJob<I>(req: Request, job: AiJob<I>): Promise<Response
     p_user_id: user.id,
     p_kind: job.kind,
     p_key: key,
+    p_bucket: job.bucket?.(input) ?? "",
   });
   if (rpcError) {
     console.error("ai_reserve", rpcError);

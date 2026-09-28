@@ -300,7 +300,7 @@ class HuntPuzzles extends Table {
 }
 
 /// A group puzzle this device has downloaded (or generated and published)
-/// and stored as an ordinary `crossword_puzzles` row, so it's played and
+/// and stored as an ordinary `crossword_puzzles` or `hunt_puzzles` row, so it's played and
 /// scored by the same screen as any other. Keyed on the server's puzzle
 /// id; the row's local id is where the progress lives, and what the
 /// leaderboard upload reads.
@@ -309,6 +309,9 @@ class GroupPuzzleLinks extends Table {
   TextColumn get remoteId => text()();
   TextColumn get groupId => text()();
   TextColumn get puzzleDate => text()();
+  // Which local table [localPuzzleId] points into: 'crossword'
+  // (crossword_puzzles) or 'hunt' (hunt_puzzles).
+  TextColumn get kind => text().withDefault(const Constant('crossword'))();
   IntColumn get localPuzzleId => integer()();
   // Last leaderboard upload, as "solved/total/completed" — skip the call
   // when nothing changed.
@@ -440,7 +443,7 @@ class UserDatabase extends _$UserDatabase {
   UserDatabase(super.e);
 
   @override
-  int get schemaVersion => 16;
+  int get schemaVersion => 17;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -552,6 +555,10 @@ class UserDatabase extends _$UserDatabase {
           }
           if (from < 16) {
             await m.createTable(groupPuzzleLinks);
+          }
+          if (from == 16) {
+            // Every link made before this was a crossword.
+            await m.addColumn(groupPuzzleLinks, groupPuzzleLinks.kind);
           }
         },
       );

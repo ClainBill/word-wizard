@@ -13,9 +13,15 @@ plugins {
 // release build falls back to the debug key so `flutter run --release`
 // still works on a dev machine. Play App Signing holds the real app key;
 // this one only signs uploads, but back it up all the same.
+//
+// SIGN_WITH_DEBUG_KEY=true forces the debug key even with key.properties
+// present: a release build that installs over a sideloaded debug build on
+// a test phone (Android refuses an update signed with a different key).
+// Never upload one of these to Play.
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
-val hasReleaseKeystore = keystorePropertiesFile.exists()
+val signWithDebugKey = System.getenv("SIGN_WITH_DEBUG_KEY") == "true"
+val hasReleaseKeystore = keystorePropertiesFile.exists() && !signWithDebugKey
 if (hasReleaseKeystore) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }

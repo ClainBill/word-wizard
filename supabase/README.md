@@ -212,9 +212,10 @@ Requests:
 
 - `ai-feature-clues` — `{headword, pos, gloss}`; key defaults to the
   word, so the same word is never billed twice.
-- `ai-crossword-review` — `{puzzle_id, rendered, word_count}` where
-  `rendered` is `renderForReview(puzzle)` from `editorial.dart` (the
-  puzzle as data). Keyed by puzzle id.
+- `ai-crossword-review` — `{puzzle_id, rendered, word_count, difficulty}`
+  where `rendered` is `renderForReview(puzzle)` from `editorial.dart` (the
+  puzzle as data) and `difficulty` is `mini | midi | mega`. Keyed by
+  puzzle id; the allowance is counted per `difficulty` (see below).
 
 What the server controls: the system prompts (`_shared/prompts.ts`), the
 model per kind, reasoning effort, output-token caps, timeouts, per-user
@@ -224,8 +225,19 @@ deploy:
 
 ```sql
 update app_config set value = 'false' where key = 'ai_enabled';   -- emergency stop
-update app_config set value = '{"free":{"crossword_review":1,"feature_clues":30},"premium":{"crossword_review":12,"feature_clues":400}}' where key = 'ai_daily_limits';
+update app_config set value = '{"free":{"crossword_review":{"mini":0,"midi":0,"mega":0},"feature_clues":30},"premium":{"crossword_review":{"mini":2,"midi":2,"mega":2},"feature_clues":400}}' where key = 'ai_daily_limits';
 ```
+
+**Limits are counted in puzzles.** A kind's limit is either a number (one
+daily allowance) or an object of per-bucket allowances. The crossword
+editor's is per size: two AI-edited puzzles a day at each of Mini, Midi
+and Mega on Premium, none on free (the free sample skips the editor).
+The app matches it — its own "Start new" stops at two puzzles per game
+per day (`lib/domain/games/daily_limit.dart`), Word Hunt included, so it
+never hands out a puzzle the editor won't touch. A request without a
+bucket (an older build) is held to the object's `"*"` entry (six). A
+group's daily crossword is edited once, by whoever builds it, from the
+`group` bucket (five a day on Premium) — see docs/Group Puzzles v1.1.md.
 
 Every call is a row in `ai_requests` with tokens and micro-dollar cost;
 `ai_usage_daily` and `ai_global_daily` are the tallies the limits read.

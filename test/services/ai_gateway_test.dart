@@ -167,10 +167,13 @@ void main() {
         puzzle,
         weekday: DateTime.monday,
         puzzleKey: 'puzzle-7-99',
+        difficulty: CrosswordDifficulty.midi,
       );
       expect(requests.single.path, '/functions/v1/ai-crossword-review');
       expect(requests.single.body['puzzle_id'], 'puzzle-7-99');
       expect(requests.single.body['word_count'], puzzle.words.length);
+      // The allowance is per size, so the size goes with the request.
+      expect(requests.single.body['difficulty'], 'midi');
       expect(requests.single.body['rendered'], contains(target.answer));
       expect(result.error, isEmpty);
       expect(result.verdict.clueEdits[target.slotId], 'A replacement clue that breaks no rules');
@@ -180,9 +183,13 @@ void main() {
       // Quota: an empty verdict with a reason the status strip can show.
       status = () => 402;
       reply = () => {'error': 'quota_exceeded'};
-      final refused = await const CrosswordReviewService().review(puzzle, weekday: DateTime.monday);
+      final refused = await const CrosswordReviewService().review(
+        puzzle,
+        weekday: DateTime.monday,
+        difficulty: CrosswordDifficulty.midi,
+      );
       expect(refused.verdict.isEmpty, isTrue);
-      expect(refused.error, contains('daily AI limit'));
+      expect(refused.error, contains('AI-edited Midi puzzles are used up'));
     },
   );
 }

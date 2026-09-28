@@ -147,8 +147,18 @@ class CrosswordReviewService {
     /// gets the stored verdict instead of a second bill. Only used through
     /// the gateway.
     String? puzzleKey,
+
+    /// The puzzle's size. The backend's allowance is two edited puzzles a
+    /// day per size, so it has to know which one this spends.
+    CrosswordDifficulty? difficulty,
+
+    /// A group's daily puzzle, edited by whoever builds it: spends the
+    /// backend's group allowance rather than a personal puzzle.
+    bool group = false,
   }) async {
-    if (AiGateway.instance.signedIn) return _reviewViaGateway(puzzle, weekday, puzzleKey);
+    if (AiGateway.instance.signedIn) {
+      return _reviewViaGateway(puzzle, weekday, puzzleKey, difficulty, group);
+    }
 
     final source = _keySource;
     final key = source?.$1;
@@ -205,6 +215,8 @@ class CrosswordReviewService {
     CrosswordPuzzle puzzle,
     int weekday,
     String? puzzleKey,
+    CrosswordDifficulty? difficulty,
+    bool group,
   ) async {
     final clock = Stopwatch()..start();
     try {
@@ -214,6 +226,8 @@ class CrosswordReviewService {
           'puzzle_id': puzzleKey ?? 'seed-${puzzle.seed}-${puzzle.words.length}',
           'rendered': renderForReview(puzzle, weekday: weekday),
           'word_count': puzzle.words.length,
+          if (difficulty != null) 'difficulty': difficulty.storageKey,
+          if (group) 'allowance': 'group',
         },
         // The function bounds its own call; this only has to outlast it.
         timeout: timeoutFor(puzzle) + const Duration(seconds: 15),
@@ -230,7 +244,9 @@ class CrosswordReviewService {
     } on AiGatewayException catch (e) {
       // The strip under the app bar shows this, so say which it was.
       final why = switch (e.failure) {
-        AiGatewayFailure.quotaExceeded => 'daily AI limit reached',
+        AiGatewayFailure.quotaExceeded => group
+            ? 'today\'s AI edits for group puzzles are used up'
+            : 'today\'s AI-edited ${difficulty?.label ?? 'crossword'} puzzles are used up',
         AiGatewayFailure.unavailable => 'AI editor unavailable right now',
         AiGatewayFailure.inProgress => 'already being reviewed',
         AiGatewayFailure.notSignedIn => 'not signed in',

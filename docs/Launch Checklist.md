@@ -8,6 +8,7 @@
  - [x] Choose monthly/yearly subscriptions or a one-time purchase. Avoid promising unlimited ongoing AI usage through a small lifetime payment.
   Monthly $4.99, Annual $29.99, Founding Member $34.99 one-time capped at 500 completed purchases (real cap, server-enforced). Lifetime = "as long as Word Wizard and its service operate", fair-use limits on server-generated content (terms draft).
  - [ ] Set AI allowances and group-puzzle creation limits.
+  AI allowance decided 2026-09-27: counted in puzzles, two AI-edited crosswords a day per size on Premium (`ai_daily_limits`, migration `20260927000000`), with the app's "Start new" capped at two per game per day to match; feature clues keep their call count (30 free / 400 Premium). Group limits (2026-09-28): 12 members, at most 5 groups per person (owned or joined), one puzzle a day per group (crossword at a chosen size, or Word Hunt), built once and AI-edited once by its builder (`group` bucket, 5/day), never regenerated. Still open: whether 400 feature-clue calls is right.
  - [x] Decide whether free users can join puzzles created by premium friends.
   Yes: a free account can join a group by code, share words and see the leaderboard; playing the group puzzle needs Premium (paywall with the puzzle as destination). Creating a group needs Premium.
  - [x] Decide whether premium follows the same app account between Android and iPhone.
@@ -137,12 +138,12 @@ RevenueCat entitlements connect products to access; its webhooks support an auth
 8. Complete privacy, support, and content requirements
 
  - [ ] Publish a privacy policy, terms, and support contact.
-  Drafted for the app as it is today: `docs/PRIVACY_POLICY.md`, `docs/TERMS.md` (governing-law line to fill in). Support contact is the in-app feedback form plus the email. Needs a public URL (the stores require one) and a read-through; revise when accounts/premium/friends ship.
+  Drafted for the app as it is today: `docs/PRIVACY_POLICY.md`, `docs/TERMS.md` (governing-law line to fill in). Support contact is the in-app feedback form plus the email. Published 2026-09-21 at https://wordwizard.wcgill.com/privacy and /terms (rendered from the docs by `site/build-legal.mjs`); still need a read-through, and the privacy policy predates accounts/premium — revise, rebuild, `wrangler deploy`.
  - [ ] Explain data collection, retention, friend sharing, and AI processing.
   Collection, retention and AI processing are in the privacy draft; friend sharing waits on the feature.
  - [ ] Obtain permission before sending personal data to third-party AI.
  - [x] Implement account deletion in the app and an external deletion-request page.
-  Settings → Account → Delete account (confirms, names the subscription caveat, verified live: cascades everything). `supabase/web/delete-account.html` still needs hosting at a public URL.
+  Settings → Account → Delete account (confirms, names the subscription caveat, verified live: cascades everything). Hosted at https://wordwizard.wcgill.com/delete-account (`site/public/delete-account.html`, wired to the dev Supabase project until prod exists) — link it from the Play listing's Data safety section.
  - [x] Explain that deleting an account does not automatically cancel a store subscription.
   On the deletion page; repeat it in the in-app confirmation dialog.
  - [ ] Complete Apple App Privacy disclosures and Google Data Safety accurately, including SDK behaviour.

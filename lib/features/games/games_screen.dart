@@ -86,7 +86,7 @@ class GamesScreen extends ConsumerWidget {
           Text('Group puzzles', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 4),
           Text(
-            'Pool your friends\' words into one daily crossword and see who knows them best.',
+            'Pool your friends\' words into a daily crossword or Word Hunt and see who knows them best.',
             style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 16),

@@ -6,6 +6,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../domain/crossword/clues.dart' show isGiveaway;
+import '../../domain/games/daily_limit.dart';
 import '../../domain/hunt/hunt_generator.dart';
 import '../../domain/hunt/hunt_lexicon.dart';
 import '../../domain/hunt/hunt_models.dart';
@@ -172,13 +173,35 @@ class HuntRepository {
   // Loading
   // -------------------------------------------------------------------
 
+  /// Whether a row is this person's own board rather than a group's: a
+  /// group board is imported under today's date like any other, but is
+  /// never "today's board" and never counts against the daily allowance.
+  Expression<bool> _ownBoard($HuntPuzzlesTable t) => t.id.isNotInQuery(
+        _db.selectOnly(_db.groupPuzzleLinks)
+          ..addColumns([_db.groupPuzzleLinks.localPuzzleId])
+          ..where(_db.groupPuzzleLinks.kind.equals('hunt')),
+      );
+
   Future<HuntPuzzleRow?> _latestRow(String date) {
     return (_db.select(_db.huntPuzzles)
-          ..where((t) => t.puzzleDate.equals(date))
+          ..where((t) => t.puzzleDate.equals(date) & _ownBoard(t))
           ..orderBy([(t) => OrderingTerm.desc(t.id)])
           ..limit(1))
         .getSingleOrNull();
   }
+
+  /// How many of this person's own boards exist for today.
+  Future<int> boardsToday() async {
+    final count = _db.huntPuzzles.id.count();
+    final query = _db.selectOnly(_db.huntPuzzles)
+      ..addColumns([count])
+      ..where(_db.huntPuzzles.puzzleDate.equals(CrosswordRepository.today()) &
+          _ownBoard(_db.huntPuzzles));
+    return (await query.getSingle()).read(count) ?? 0;
+  }
+
+  /// Whether "New board" may make another board today.
+  Future<bool> canStartNew() async => await boardsToday() < puzzlesPerDay;
 
   Future<HuntSession> _sessionFromRow(HuntPuzzleRow row) async {
     final play = await _playRow(row.id);
@@ -237,9 +260,13 @@ class HuntRepository {
     return row == null ? null : await _sessionFromRow(row);
   }
 
-  /// Another board for today, keeping the previous one in history.
-  Future<HuntSession?> regenerate() =>
-      _generateAndSave(CrosswordRepository.today(), seed: _rand.nextInt(1 << 30));
+  /// Another board for today, keeping the previous one in history. At
+  /// most [puzzlesPerDay] a day, counting the day's own: past that it
+  /// throws [DailyPuzzleLimitReached].
+  Future<HuntSession?> regenerate() async {
+    if (!await canStartNew()) throw const DailyPuzzleLimitReached('Word Hunt');
+    return _generateAndSave(CrosswordRepository.today(), seed: _rand.nextInt(1 << 30));
+  }
 
   Future<HuntSession?> _generateAndSave(String date, {int? seed}) async {
     final generation = await generate(date, seed: seed);
@@ -299,6 +326,72 @@ class HuntRepository {
         themeWords: theme?.theme.words ?? const {},
       ),
     ));
+  }
+
+  // -------------------------------------------------------------------
+  // Group boards (docs/Group Puzzles v1.1.md)
+  // -------------------------------------------------------------------
+
+  /// How many pool words a group board asks for. One more than a personal
+  /// board's study words, since there's no theme anchor to make room for.
+  static const _poolAnchors = 3;
+
+  /// Builds a board anchored on a group's shared words instead of this
+  /// person's study pool: same lexicon, same engine, same quality gate.
+  ///
+  /// Everything here must come out the same on every member's device, so
+  /// the anchors are chosen from the pool sorted and shuffled by [seed],
+  /// and the day's theme only colours the board (its words light up when
+  /// found) — it contributes no anchor, because picking one depends on
+  /// this device's recent boards.
+  Future<HuntGeneration> generateFromPool(
+    List<({String headword, String? gloss})> pool, {
+    required String date,
+    required int seed,
+  }) async {
+    final lexicon = await this.lexicon();
+    final sorted = [...pool]..sort((a, b) => a.headword.compareTo(b.headword));
+    final seen = <String>{};
+    final candidates = <HuntAnchor>[];
+    for (final word in sorted) {
+      if (!_anchorable.hasMatch(word.headword)) continue;
+      final text = word.headword.replaceAll("'", '').toUpperCase();
+      if (!lexicon.isAnchorable(text) || !seen.add(text)) continue;
+      final gloss = word.gloss;
+      candidates.add(HuntAnchor(
+        text: text,
+        display: word.headword,
+        kind: HuntAnchorKind.study,
+        clue: gloss == null || gloss.isEmpty || isGiveaway(gloss, text) ? null : gloss,
+      ));
+    }
+    candidates.shuffle(Random(seed));
+    final theme = (await themes()).forDate(date);
+    return _generate((
+      lexicon: lexicon,
+      request: HuntGenerationRequest(
+        seed: seed,
+        anchors: candidates.take(_poolAnchors).toList(),
+        themeLabel: theme?.label,
+        themeWords: theme?.words ?? const {},
+      ),
+    ));
+  }
+
+  /// Stores a board that came from elsewhere — the group's published one —
+  /// as a board of this device's own, playable and timed like any other.
+  /// Returns its local id.
+  Future<int> importPuzzle(String date, HuntPuzzle puzzle) => _db.into(_db.huntPuzzles).insert(
+        HuntPuzzlesCompanion.insert(puzzleDate: date, puzzleJson: jsonEncode(puzzle.toJson())),
+      );
+
+  /// How far one board has been played, for the group leaderboard. Null if
+  /// the row is gone.
+  Future<HuntPlayState?> playState(int puzzleId) async {
+    final row = await (_db.select(_db.huntPuzzles)..where((t) => t.id.equals(puzzleId)))
+        .getSingleOrNull();
+    if (row == null) return null;
+    return _historyEntry(row, await _playRow(puzzleId), row.id).play;
   }
 
   /// Up to [_studyAnchors] of the user's study words the lexicon can vouch

@@ -6,9 +6,15 @@ friend groups", §7.2 "Privacy and social safety").*
 ## The idea
 
 A **group** is a handful of people (up to 12) who pool the words they're
-each studying. Every day the pool becomes **one crossword the whole group
-solves** — the same grid for everyone — and a leaderboard says who knew the
-group's vocabulary best. It's the social reason to keep saving words, and
+each studying. Every day the pool becomes **one puzzle the whole group
+solves** — the same grid or board for everyone — and a leaderboard says who
+knew the group's vocabulary best.
+
+**What a group plays** is chosen when it's made (27 Sept 2026): a
+**crossword** at one size — Mini, Midi or Mega — or a **Word Hunt** board.
+It's fixed after that (a trigger refuses a change), and
+`group_publish_puzzle` accepts only a puzzle of the group's own kind and
+size, so every member plays the same thing whatever build they're on. It's the social reason to keep saving words, and
 an invite is the free tier's first hands-on look at Premium.
 
 Two modes were in the brief: **competitive** (everyone solves their own
@@ -48,10 +54,33 @@ local dictionary when it knows the word, else the shared gloss), seeded
 from `(group id, date)` so simultaneous generators produce like grids —
 and `group_publish_puzzle` makes the race harmless anyway. The winning
 grid is imported as an ordinary local `crossword_puzzles` row
-(`group_puzzle_links` maps server id → local id), so it's **played,
-saved and timed by the existing crossword screen** with no changes to it.
-Scores upload when the group screen is next opened (skipped when
-unchanged). Size is Midi (9×9) for now.
+(`group_puzzle_links` maps server id → local id, with a `kind`), so it's
+**played, saved and timed by the existing crossword screen** with no
+changes to it. A Word Hunt group works the same way through
+`HuntRepository.generateFromPool()` / `importPuzzle()` and the hunt screen:
+up to three pool words anchor the board (sorted, then shuffled by the
+shared seed), and the day's theme colours it without adding an anchor,
+since choosing one depends on each device's recent boards. Group rows are
+never "today's puzzle" for the personal games and don't count against the
+two-a-day allowance. Scores upload when the group screen is next opened
+(skipped when unchanged), each with its leaderboard points from
+`lib/domain/games/scoring.dart`.
+
+**Built once, edited once (28 Sept 2026).** `group_claim_build` gives one
+member a five-minute claim on the day's puzzle; they generate it, run the
+AI editor on a crossword (their `crossword_review` allowance, `group`
+bucket: five a day on Premium, one per group at most) and publish the
+edited grid. Anyone opening it meanwhile is told who's building and waits
+for it rather than generating — and paying for — another. One puzzle per
+group per day; nobody can regenerate it. A person can be in at most five
+groups, owned or joined.
+
+**Group leaderboard.** Besides today's scores, the group screen shows
+standings — every member's points summed over the group's puzzles, *This
+week* (from Monday) or *All time* — from `group_leaderboard(group, since)`,
+members only, listing members who haven't played yet with nothing. A
+play with anything revealed (the crossword help menu) is marked helped:
+it scores 0 and the standings ignore its points.
 
 This is why there is no Cloud Run worker in v1.1: the planned "Dart
 container reusing `lib/domain/crossword`" (Launch Checklist §3) is only
@@ -61,8 +90,8 @@ needed for *server-initiated* generation — see deferred.
 
 - **Games → Group puzzles** (`/games/groups`): your groups; *Start a
   group* (Premium); *Join with a code* (anyone signed in).
-- **Group screen** (`/games/groups/:id`): today's crossword (Play / Build
-  today's puzzle), leaderboard with member names, **Share my words**
+- **Group screen** (`/games/groups/:id`): today's puzzle (Play / Build
+  today's puzzle), today's scores and the week / all-time standings, **Share my words**
   switch behind a consent dialog (`shareWordsConsentText`: headwords only,
   never notes, pinned meanings or lookups; removal is immediate), members
   (owner can remove), invite code (copy / share sheet), change my name,

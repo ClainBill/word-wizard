@@ -3,10 +3,11 @@
 /// only sums. One rule for everyone, so it lives here and nowhere else.
 ///
 /// Crossword: points per correctly filled answer scale with the grid
-/// (Mini ×1, Midi ×2, Mega ×3); finishing adds a bonus, finishing without
-/// reveals adds another, and a clean finish under half an hour earns up
-/// to 30 more for pace. An abandoned puzzle keeps the points for the
-/// answers it got — progress counts.
+/// (Mini ×1, Midi ×2, Mega ×3); finishing adds a bonus, and a finish under
+/// half an hour earns up to 30 more for pace. An abandoned puzzle keeps
+/// the points for the answers it got — progress counts. A puzzle with
+/// anything revealed is marked helped and scores nothing at all: the help
+/// menu is for learning, not for climbing a board.
 ///
 /// Word Hunt: the board's own score (required words score their length,
 /// bonus words one point) times five, plus a bonus for clearing the
@@ -22,15 +23,13 @@ int crosswordScore({
   required bool aided,
   required int activeMs,
 }) {
+  if (aided) return 0;
   final scale = difficulty.index + 1;
   var score = solvedWords * 10 * scale;
   if (completed) {
-    score += 50 * scale;
-    if (!aided) {
-      score += 25 * scale;
-      final minutes = activeMs / 60000;
-      if (activeMs > 0 && minutes < 30) score += ((30 - minutes) * scale).round();
-    }
+    score += 75 * scale;
+    final minutes = activeMs / 60000;
+    if (activeMs > 0 && minutes < 30) score += ((30 - minutes) * scale).round();
   }
   return score;
 }

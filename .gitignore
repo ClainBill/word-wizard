@@ -82,3 +82,13 @@ tool/pipeline/out/dictionary-full.db
 supabase/.env
 supabase/.branches
 supabase/.temp
+
+# Crossword harness runs (tool/crossword_harness.dart)
+tool/crossword_harness/out/
+
+# Signing keys never go in git (android/key.properties points at them)
+*.jks
+*.keystore
+
+# Wrangler's local cache (account details)
+site/.wrangler/

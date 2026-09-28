@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
+import '../../domain/crossword/crossword_models.dart';
 import '../../domain/groups/group_models.dart';
 import '../../services/groups_api.dart';
 import '../premium/paywall_screen.dart';
@@ -20,6 +21,7 @@ class GroupsScreen extends ConsumerWidget {
     final user = ref.watch(authUserProvider).valueOrNull;
     final premium = ref.watch(isPremiumProvider);
     final scheme = Theme.of(context).colorScheme;
+    final full = (ref.watch(myGroupsProvider).valueOrNull?.length ?? 0) >= maxGroupsPerPerson;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Group puzzles')),
@@ -34,7 +36,8 @@ class GroupsScreen extends ConsumerWidget {
                 children: [
                   Text(
                     'Pool the words your group is learning; every day the pool becomes a '
-                    'crossword you all solve, and a leaderboard says who knew them best.',
+                    'puzzle you all solve — a crossword or a Word Hunt, whichever the group '
+                    'was set up for — and a leaderboard says who knew them best.',
                     style: TextStyle(color: scheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 16),
@@ -66,6 +69,7 @@ class GroupsScreen extends ConsumerWidget {
                                   ),
                                   title: Text(g.name),
                                   subtitle: Text(
+                                    '${g.playsLabel} · '
                                     '${g.memberCount} ${g.memberCount == 1 ? 'member' : 'members'}'
                                     '${g.isOwnedBy(user.id) ? ' · yours' : ''}',
                                   ),
@@ -84,16 +88,28 @@ class GroupsScreen extends ConsumerWidget {
                         error: (e, _) => _Message('$e'),
                       ),
                   const SizedBox(height: 16),
+                  if (full)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        'You\'re in $maxGroupsPerPerson groups — the most anyone can be in. '
+                        'Leave one to start or join another.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      ),
+                    ),
                   FilledButton.icon(
-                    onPressed: () => premium
-                        ? _create(context, ref, user.id)
-                        : showPaywall(context, source: 'groups_create'),
+                    onPressed: full
+                        ? null
+                        : () => premium
+                              ? _create(context, ref, user.id)
+                              : showPaywall(context, source: 'groups_create'),
                     icon: Icon(premium ? Icons.add : Icons.workspace_premium_outlined),
                     label: Text(premium ? 'Start a group' : 'Start a group (Premium)'),
                   ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
-                    onPressed: () => _join(context, ref),
+                    onPressed: full ? null : () => _join(context, ref),
                     icon: const Icon(Icons.login),
                     label: const Text('Join with a code'),
                   ),
@@ -104,23 +120,34 @@ class GroupsScreen extends ConsumerWidget {
   }
 
   Future<void> _create(BuildContext context, WidgetRef ref, String userId) async {
-    final result = await showModalBottomSheet<(String, String)>(
+    final result = await showModalBottomSheet<_SheetResult>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (context) =>
-          const _NameSheet(title: 'Start a group', firstLabel: 'Group name', action: 'Create'),
+      builder: (context) => const _NameSheet(
+        title: 'Start a group',
+        firstLabel: 'Group name',
+        action: 'Create',
+        chooseMode: true,
+      ),
     );
     if (result == null || !context.mounted) return;
     await _run(context, ref, () async {
-      final id = await ref.read(groupsApiProvider).create(name: result.$1, displayName: result.$2);
+      final id = await ref
+          .read(groupsApiProvider)
+          .create(
+            name: result.first,
+            displayName: result.name,
+            kind: result.kind,
+            size: result.size,
+          );
       ref.invalidate(myGroupsProvider);
       if (context.mounted) context.push('/games/groups/$id');
     });
   }
 
   Future<void> _join(BuildContext context, WidgetRef ref) async {
-    final result = await showModalBottomSheet<(String, String)>(
+    final result = await showModalBottomSheet<_SheetResult>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -135,7 +162,7 @@ class GroupsScreen extends ConsumerWidget {
     await _run(context, ref, () async {
       final id = await ref
           .read(groupsApiProvider)
-          .join(code: normalizeInviteCode(result.$1), displayName: result.$2);
+          .join(code: normalizeInviteCode(result.first), displayName: result.name);
       ref.invalidate(myGroupsProvider);
       if (context.mounted) context.push('/games/groups/$id');
     });
@@ -198,18 +225,28 @@ class _Message extends StatelessWidget {
   );
 }
 
+typedef _SheetResult = ({
+  String first,
+  String name,
+  GroupPuzzleKind kind,
+  CrosswordDifficulty size,
+});
+
 /// Two fields: the group's name or the code, and what to call you in it.
+/// Starting a group also chooses what it plays, for good.
 class _NameSheet extends StatefulWidget {
   final String title;
   final String firstLabel;
   final String action;
   final bool code;
+  final bool chooseMode;
 
   const _NameSheet({
     required this.title,
     required this.firstLabel,
     required this.action,
     this.code = false,
+    this.chooseMode = false,
   });
 
   @override
@@ -219,6 +256,8 @@ class _NameSheet extends StatefulWidget {
 class _NameSheetState extends State<_NameSheet> {
   final _first = TextEditingController();
   final _name = TextEditingController();
+  GroupPuzzleKind _kind = GroupPuzzleKind.crossword;
+  CrosswordDifficulty _size = CrosswordDifficulty.midi;
   String? _error;
 
   @override
@@ -239,7 +278,7 @@ class _NameSheetState extends State<_NameSheet> {
       setState(() => _error = 'A code is eight letters and digits.');
       return;
     }
-    Navigator.of(context).pop((first, name));
+    Navigator.of(context).pop((first: first, name: name, kind: _kind, size: _size));
   }
 
   @override
@@ -279,6 +318,40 @@ class _NameSheetState extends State<_NameSheet> {
               counterText: '',
             ),
           ),
+          if (widget.chooseMode) ...[
+            const SizedBox(height: 16),
+            Text('Every day, play', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 8),
+            SegmentedButton<GroupPuzzleKind>(
+              segments: [
+                for (final k in GroupPuzzleKind.values)
+                  ButtonSegment(
+                    value: k,
+                    label: Text(k.label),
+                    icon: Icon(k == GroupPuzzleKind.hunt ? Icons.apps : Icons.grid_on),
+                  ),
+              ],
+              selected: {_kind},
+              onSelectionChanged: (s) => setState(() => _kind = s.first),
+            ),
+            if (_kind == GroupPuzzleKind.crossword) ...[
+              const SizedBox(height: 12),
+              SegmentedButton<CrosswordDifficulty>(
+                showSelectedIcon: false,
+                segments: [
+                  for (final d in CrosswordDifficulty.values)
+                    ButtonSegment(value: d, label: Text('${d.label} ${d.size}×${d.size}')),
+                ],
+                selected: {_size},
+                onSelectionChanged: (s) => setState(() => _size = s.first),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Text(
+              'Chosen once — the group plays this every day.',
+              style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+          ],
           if (_error != null) ...[
             const SizedBox(height: 8),
             Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),

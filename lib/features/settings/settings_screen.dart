@@ -7,6 +7,7 @@ import '../../services/api_key_store.dart';
 import '../../services/feedback_config.dart';
 import 'account_section.dart';
 import 'api_key_sheet.dart';
+import 'backup_section.dart';
 import 'premium_section.dart';
 import 'voice_picker_sheet.dart';
 
@@ -191,6 +192,8 @@ class SettingsScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/games/crossword-bans'),
           ),
+          const Divider(),
+          const BackupSection(),
           const Divider(),
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 16, 16, 4),

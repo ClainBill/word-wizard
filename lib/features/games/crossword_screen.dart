@@ -8,6 +8,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
 import '../../domain/games/active_clock.dart';
+import '../../domain/games/daily_limit.dart';
+import 'daily_limit_dialog.dart';
 import '../../data/repositories/crossword_repository.dart';
 import '../../domain/crossword/crossword_models.dart';
 import '../../domain/premium/premium.dart' show sampleWithoutEditorNote;
@@ -15,6 +17,10 @@ import '../premium/paywall_screen.dart' show showPaywall;
 import '../progress/progress_format.dart';
 
 String _cellKey(int row, int col) => '$row,$col';
+
+/// What the help menu can do. Checks only point out wrong letters; reveals
+/// fill letters in and mark the puzzle as helped.
+enum _Help { checkLetter, checkWord, checkPuzzle, revealLetter, revealWord, revealPuzzle }
 
 class CrosswordScreen extends ConsumerStatefulWidget {
   final CrosswordDifficulty difficulty;
@@ -66,10 +72,10 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
   final Set<String> _wrongCells = {};
 
   /// Grid-form answers with at least one cell the user was given rather than
-  /// worked out. Nothing on the screen reveals any more — the menu that did
-  /// was cut before release — but puzzles solved with it before that keep
-  /// their record, so an assisted solve from then never shows as clean.
-  /// Those answers are deliberately *not* held back from future puzzles: a
+  /// worked out — through the help menu's reveals. Any at all marks the
+  /// puzzle as helped: it scores nothing on either leaderboard and is left
+  /// out of best times. Those answers are deliberately *not* held back
+  /// from future puzzles: a
   /// revealed answer was not discovered, so it must come back, because the
   /// user still needs to learn it (PORTING_SPEC.md §6.2a).
   final Set<String> _revealedAnswers = {};
@@ -591,28 +597,130 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
     setState(() => _completed = true);
   }
 
-  void _check() {
+  void _check() => _checkCells(_answers.keys);
+
+  /// Marks the wrong letters among [cells]. A check never fills anything
+  /// in, so it doesn't count as help.
+  void _checkCells(Iterable<String> cells) {
+    final wrong = [
+      for (final key in cells)
+        if (_filled[key] != null && _answers[key] != null && _filled[key] != _answers[key]) key,
+    ];
     setState(() {
       _wrongCells
         ..clear()
-        ..addAll(_answers.entries.where((e) => _filled[e.key] != null && _filled[e.key] != e.value).map((e) => e.key));
+        ..addAll(wrong);
     });
+    if (wrong.isEmpty && mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nothing wrong so far.'), duration: Duration(seconds: 2)),
+      );
+    }
+  }
+
+  Future<void> _help(_Help action) async {
+    final cell = _selectedCell;
+    final word = _activeWord;
+    switch (action) {
+      case _Help.checkLetter:
+        if (cell != null) _checkCells([cell]);
+      case _Help.checkWord:
+        if (word != null) _checkCells([for (final c in word.cells) _cellKey(c.$1, c.$2)]);
+      case _Help.checkPuzzle:
+        _check();
+      case _Help.revealLetter:
+        if (cell == null) return;
+        final parts = cell.split(',');
+        await _reveal('Reveal letter', [(int.parse(parts[0]), int.parse(parts[1]))]);
+      case _Help.revealWord:
+        if (word == null) return;
+        await _reveal('Reveal word', word.cells);
+      case _Help.revealPuzzle:
+        await _reveal('Reveal puzzle', [for (final w in _clueOrder) ...w.cells]);
+    }
+  }
+
+  /// Asks once, before the first reveal on a puzzle, whether to give up
+  /// its score. Returns true when it's fine to go ahead — immediately if
+  /// the puzzle is already helped or finished.
+  Future<bool> _confirmHelp(String action) async {
+    if (_revealedAnswers.isNotEmpty || _completed) return true;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('$action?'),
+        content: const Text(
+          'Revealing marks this puzzle as helped. It won\'t score any points on the '
+          'leaderboards — yours or your group\'s — it\'s left out of your best times, '
+          'and revealed answers aren\'t counted as learned.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Keep going')),
+          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: Text(action)),
+        ],
+      ),
+    );
+    return ok == true && mounted;
+  }
+
+  /// Fills in the answer at each of [targets] the user hasn't already got
+  /// right, and records that it was given rather than solved: every answer
+  /// touching a filled-in cell is marked revealed — a partly revealed
+  /// answer was still not discovered unaided.
+  Future<void> _reveal(String action, List<(int, int)> targets) async {
+    final needed = [
+      for (final t in targets)
+        if (_answers[_cellKey(t.$1, t.$2)] case final answer?
+            when _filled[_cellKey(t.$1, t.$2)] != answer)
+          _cellKey(t.$1, t.$2),
+    ];
+    if (needed.isEmpty) return; // already right: no help needed or given
+    if (!await _confirmHelp(action)) return;
+    setState(() {
+      for (final key in needed) {
+        _filled[key] = _answers[key]!;
+        final words = _cellWords[key];
+        for (final w in [words?.across, words?.down]) {
+          if (w != null) _revealedAnswers.add(w.answer);
+        }
+      }
+      _wrongCells.clear();
+    });
+    _saveProgress();
+    _flushPlayTime();
+    _checkCompletion();
   }
 
   /// A new seed, without the "replaces today's puzzle" confirmation:
   /// there is no puzzle to lose.
   Future<void> _retryGeneration() async {
-    await ref.read(crosswordRepositoryProvider).regenerate(widget.difficulty);
+    try {
+      await ref.read(crosswordRepositoryProvider).regenerate(widget.difficulty);
+    } on DailyPuzzleLimitReached catch (e) {
+      if (mounted) await showDailyLimitDialog(context, e);
+      return;
+    }
     if (!mounted) return;
     ref.invalidate(crosswordSessionProvider(_sessionKey));
   }
 
   Future<void> _regenerate() async {
+    final repo = ref.read(crosswordRepositoryProvider);
+    final made = await repo.puzzlesToday(widget.difficulty);
+    if (!mounted) return;
+    if (made >= puzzlesPerDay) {
+      await showDailyLimitDialog(context, DailyPuzzleLimitReached(widget.difficulty.label));
+      return;
+    }
     final confirmed = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('Start a new puzzle?'),
-            content: const Text('This replaces today\'s puzzle. Any progress on it will be lost.'),
+            content: Text(
+              'Today\'s puzzle stays in history with its progress. '
+              '${made + 1 >= puzzlesPerDay ? 'This is your last new ${widget.difficulty.label} today.' : ''}',
+            ),
             actions: [
               TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
               FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Start new')),
@@ -622,7 +730,12 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
         false;
     if (!confirmed || !mounted) return;
 
-    await ref.read(crosswordRepositoryProvider).regenerate(widget.difficulty);
+    try {
+      await repo.regenerate(widget.difficulty);
+    } on DailyPuzzleLimitReached catch (e) {
+      if (mounted) await showDailyLimitDialog(context, e);
+      return;
+    }
     if (!mounted) return;
     ref.invalidate(crosswordSessionProvider(_sessionKey));
     // _prepare() re-runs on its own once the freshly generated session
@@ -666,7 +779,30 @@ class _CrosswordScreenState extends ConsumerState<CrosswordScreen>
         actions: [
           if (sessionAsync.valueOrNull != null) _StudyPoolBadge(puzzle: sessionAsync.valueOrNull!.puzzle),
           if (sessionAsync.valueOrNull != null)
-            IconButton(icon: const Icon(Icons.fact_check_outlined), tooltip: 'Check', onPressed: _check),
+            PopupMenuButton<_Help>(
+              icon: Icon(
+                _revealedAnswers.isEmpty ? Icons.lightbulb_outline : Icons.lightbulb,
+              ),
+              tooltip: _revealedAnswers.isEmpty ? 'Check and reveal' : 'Check and reveal (helped)',
+              onSelected: _help,
+              itemBuilder: (context) => [
+                const PopupMenuItem(value: _Help.checkLetter, child: Text('Check letter')),
+                const PopupMenuItem(value: _Help.checkWord, child: Text('Check word')),
+                const PopupMenuItem(value: _Help.checkPuzzle, child: Text('Check puzzle')),
+                const PopupMenuDivider(),
+                PopupMenuItem(
+                  enabled: false,
+                  height: 28,
+                  child: Text(
+                    'Revealing marks the puzzle as helped — no points',
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                ),
+                const PopupMenuItem(value: _Help.revealLetter, child: Text('Reveal letter')),
+                const PopupMenuItem(value: _Help.revealWord, child: Text('Reveal word')),
+                const PopupMenuItem(value: _Help.revealPuzzle, child: Text('Reveal puzzle')),
+              ],
+            ),
           if (widget.puzzleId == null)
             IconButton(icon: const Icon(Icons.refresh), tooltip: 'New puzzle', onPressed: _regenerate),
           IconButton(
@@ -795,7 +931,7 @@ class _PuzzleBody extends StatelessWidget {
             child: Text(
               state._activeMs > 0
                   ? 'Solved it in ${formatClock(Duration(milliseconds: state._activeMs))}'
-                      '${state._revealedAnswers.isEmpty ? ' 🎉' : ' — with some help'}'
+                      '${state._revealedAnswers.isEmpty ? ' 🎉' : ' — with help, so no points'}'
                   : 'Solved it! 🎉',
               textAlign: TextAlign.center,
               style: TextStyle(

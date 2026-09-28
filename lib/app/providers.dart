@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
 import '../data/app_databases.dart';
+import '../data/repositories/backup_repository.dart';
 import '../data/repositories/crossword_repository.dart';
 import '../data/repositories/hunt_repository.dart';
 import '../data/repositories/list_repository.dart';
@@ -57,6 +58,10 @@ final listRepositoryProvider = Provider<ListRepository>(
 
 final studyRepositoryProvider = Provider<StudyRepository>(
   (ref) => StudyRepository(ref.watch(appDatabasesProvider).user),
+);
+
+final backupRepositoryProvider = Provider<BackupRepository>(
+  (ref) => BackupRepository(ref.watch(appDatabasesProvider).user),
 );
 
 final notesRepositoryProvider = Provider<NotesRepository>(
@@ -446,6 +451,7 @@ final groupPuzzleServiceProvider = Provider<GroupPuzzleService>(
   (ref) => GroupPuzzleService(
     ref.watch(groupsApiProvider),
     ref.watch(crosswordRepositoryProvider),
+    ref.watch(huntRepositoryProvider),
     ref.watch(studyRepositoryProvider),
     ref.watch(appDatabasesProvider).user,
   ),
@@ -472,12 +478,25 @@ final groupPoolProvider = FutureProvider.autoDispose.family<List<GroupWord>, Str
 /// Today's published puzzle for a group, or null if nobody has opened it
 /// yet today.
 final groupTodayPuzzleProvider = FutureProvider.autoDispose.family<GroupPuzzle?, String>(
-  (ref, id) => ref.watch(groupPuzzleServiceProvider).todayPuzzle(id),
+  (ref, id) async {
+    final group = await ref.watch(groupProvider(id).future);
+    if (group == null) return null;
+    return ref.watch(groupPuzzleServiceProvider).todayPuzzle(group);
+  },
 );
 
 final groupScoresProvider = FutureProvider.autoDispose.family<List<GroupScore>, String>(
   (ref, puzzleId) => ref.watch(groupsApiProvider).scores(puzzleId),
 );
+
+/// A group's standings — every member's points summed — this week or
+/// all time.
+final groupStandingsProvider = FutureProvider.autoDispose
+    .family<List<GroupStanding>, (String, GroupStandingsPeriod)>(
+      (ref, key) => ref
+          .watch(groupsApiProvider)
+          .standings(key.$1, since: key.$2.since(DateTime.now())),
+    );
 
 // ---------------------------------------------------------------------------
 // Global leaderboard

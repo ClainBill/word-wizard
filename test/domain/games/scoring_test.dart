@@ -3,7 +3,7 @@ import 'package:word_wizard/domain/crossword/crossword_models.dart';
 import 'package:word_wizard/domain/games/scoring.dart';
 
 void main() {
-  test('crossword points: per answer by size, bonuses for finishing clean and fast', () {
+  test('crossword points: per answer by size, bonuses for finishing and pace, nothing when helped', () {
     int s({
       CrosswordDifficulty d = CrosswordDifficulty.mini,
       int words = 10,
@@ -15,7 +15,8 @@ void main() {
 
     expect(s(words: 4), 40, reason: 'an abandoned mini keeps its answers');
     expect(s(d: CrosswordDifficulty.midi, words: 4), 80);
-    expect(s(words: 10, done: true, aided: true), 100 + 50);
+    expect(s(words: 10, done: true, aided: true), 0, reason: 'a revealed board is helped: no points');
+    expect(s(words: 4, aided: true), 0);
     expect(s(words: 10, done: true, ms: 10 * 60000), 100 + 50 + 25 + 20);
     expect(s(words: 10, done: true, ms: 45 * 60000), 100 + 50 + 25, reason: 'no pace bonus past 30 min');
     expect(s(d: CrosswordDifficulty.mega, words: 30, done: true, ms: 20 * 60000), 900 + 150 + 75 + 30);
