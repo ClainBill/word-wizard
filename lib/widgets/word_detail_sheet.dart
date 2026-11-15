@@ -6,7 +6,10 @@ import '../domain/models/entry.dart';
 import '../features/entry/entry_detail_screen.dart';
 
 final _sheetWordProvider = FutureProvider.family<WordEntry?, String>(
-  (ref, headword) => ref.watch(searchRepositoryProvider).loadWord(headword),
+  (ref, headword) {
+    ref.watch(slangEditsProvider);
+    return ref.watch(searchRepositoryProvider).loadWord(headword);
+  },
 );
 
 /// Pops the full dictionary card for [headword] up from below as a

@@ -12,7 +12,10 @@ import '../../widgets/word_detail_sheet.dart';
 import 'reader_page.dart';
 
 final _peekEntryProvider = FutureProvider.autoDispose.family<WordEntry?, String>(
-  (ref, headword) => ref.watch(searchRepositoryProvider).loadWord(headword),
+  (ref, headword) {
+    ref.watch(slangEditsProvider);
+    return ref.watch(searchRepositoryProvider).loadWord(headword);
+  },
 );
 
 /// The strip that rises from the bottom when a word on the page is tapped:
@@ -103,7 +106,7 @@ class ReaderPeekPanel extends ConsumerWidget {
                   IconButton(
                     icon: const Icon(Icons.volume_up_outlined),
                     tooltip: 'Pronounce',
-                    onPressed: () => ref.read(ttsProvider).speak(word.headword),
+                    onPressed: () => ref.read(ttsProvider).speak(entry?.spokenAs ?? word.headword),
                   ),
                   IconButton(
                     icon: const Icon(Icons.close),

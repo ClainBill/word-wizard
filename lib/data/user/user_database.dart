@@ -420,6 +420,64 @@ class LookupLog extends Table {
   DateTimeColumn get lookedUpAt => dateTime().withDefault(currentDateAndTime)();
 }
 
+/// A word in the Slang Stack — see `domain/models/slang.dart`. One row per
+/// headword, whether or not the dictionary has it too.
+///
+/// Ids start at `slangIdBase` rather than 1 (`SlangRepository` sets each
+/// one), so a slang word's id can stand in for a dictionary entry id in
+/// `study_cards`, `list_items` and `entry_notes` without ever meaning a
+/// dictionary word as well. AUTOINCREMENT so an id is never handed out
+/// twice: a deleted word's id may still sit in an old puzzle or backup.
+@DataClassName('SlangWordRow')
+class SlangWords extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get headword => text().unique()();
+  TextColumn get sayItLike => text().nullable()();
+  TextColumn get region => text().nullable()();
+  TextColumn get scene => text().nullable()();
+  // SlangFreshness.storageKey.
+  TextColumn get freshness => text().nullable()();
+  TextColumn get heardAt => text().nullable()();
+  TextColumn get origin => text().nullable()();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+}
+
+/// One of a slang word's meanings. Ids from `slangIdBase` up and never
+/// reused, like the word's, so a pin in [StudySenses] can name one without
+/// colliding with a dictionary sense.
+@DataClassName('SlangSenseRow')
+class SlangSenses extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get wordId => integer().references(SlangWords, #id)();
+  TextColumn get pos => text()();
+  TextColumn get gloss => text()();
+  TextColumn get plainEnglish => text().nullable()();
+  // SlangTone.storageKey.
+  TextColumn get tone => text().nullable()();
+  IntColumn get senseOrder => integer()();
+}
+
+@DataClassName('SlangExampleRow')
+class SlangExamples extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get senseId => integer().references(SlangSenses, #id)();
+  TextColumn get sentence => text()();
+}
+
+/// Other ways a slang word is written, and its inflections — what lets a
+/// lookup or the reader reach the word from "rizzed" or "fina".
+@DataClassName('SlangFormRow')
+class SlangForms extends Table {
+  IntColumn get wordId => integer().references(SlangWords, #id)();
+  TextColumn get formText => text()();
+  // 'spelling' | 'form'
+  TextColumn get formType => text()();
+
+  @override
+  Set<Column> get primaryKey => {wordId, formText};
+}
+
 @DriftDatabase(tables: [
   Lists,
   ListItems,
@@ -438,12 +496,16 @@ class LookupLog extends Table {
   GameResults,
   SearchLog,
   LookupLog,
+  SlangWords,
+  SlangSenses,
+  SlangExamples,
+  SlangForms,
 ])
 class UserDatabase extends _$UserDatabase {
   UserDatabase(super.e);
 
   @override
-  int get schemaVersion => 17;
+  int get schemaVersion => 18;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -559,6 +621,12 @@ class UserDatabase extends _$UserDatabase {
           if (from == 16) {
             // Every link made before this was a crossword.
             await m.addColumn(groupPuzzleLinks, groupPuzzleLinks.kind);
+          }
+          if (from < 18) {
+            await m.createTable(slangWords);
+            await m.createTable(slangSenses);
+            await m.createTable(slangExamples);
+            await m.createTable(slangForms);
           }
         },
       );

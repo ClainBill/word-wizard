@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../domain/models/entry.dart';
+import '../features/slang/slang_chips.dart';
 import 'pos_tag.dart';
 
 class EntryCard extends StatelessWidget {
@@ -16,9 +17,12 @@ class EntryCard extends StatelessWidget {
       title: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Text(entry.headword, style: Theme.of(context).textTheme.titleMedium),
+          Flexible(
+            child: Text(entry.headword, style: Theme.of(context).textTheme.titleMedium, overflow: TextOverflow.ellipsis),
+          ),
           const SizedBox(width: 8),
           PosTag(entry.pos),
+          if (entry.slang) ...[const SizedBox(width: 6), const SlangBadge()],
           if (entry.matchedForm != null) ...[
             const SizedBox(width: 8),
             // Why a different word is here: it's what "ran" is a form of.

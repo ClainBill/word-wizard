@@ -34,8 +34,8 @@ class _BackupSectionState extends ConsumerState<BackupSection> {
           leading: const Icon(Icons.save_alt_outlined),
           title: const Text('Back up to a file'),
           subtitle: const Text(
-            'Your lists, study progress and history, pinned meanings and notes, in one file '
-            'you keep — on the phone, or in Drive or iCloud.',
+            'Your lists, study progress and history, pinned meanings, notes and Slang Stack, '
+            'in one file you keep — on the phone, or in Drive or iCloud.',
           ),
           enabled: !_busy,
           onTap: _backUp,
@@ -124,8 +124,9 @@ class _BackupSectionState extends ConsumerState<BackupSection> {
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            'Restored ${result.cards} study ${result.cards == 1 ? 'card' : 'cards'} and '
-            '${result.listWords} list ${result.listWords == 1 ? 'word' : 'words'}'
+            'Restored ${result.cards} study ${result.cards == 1 ? 'card' : 'cards'}, '
+            '${result.listWords} list ${result.listWords == 1 ? 'word' : 'words'} and '
+            '${result.slangWords} slang ${result.slangWords == 1 ? 'word' : 'words'}'
             '${result.skippedWords > 0 ? '. ${result.skippedWords} ${result.skippedWords == 1 ? 'word isn\'t' : 'words aren\'t'} in this dictionary and ${result.skippedWords == 1 ? 'was' : 'were'} skipped' : ''}.',
           ),
           duration: const Duration(seconds: 6),
@@ -169,13 +170,15 @@ class _RestoreDialog extends StatelessWidget {
           Text(
             '${plural(summary.lists, 'list', 'lists')} with ${plural(summary.listWords, 'word', 'words')}\n'
             '${plural(summary.studyWords, 'word', 'words')} studied, ${plural(summary.reviews, 'review', 'reviews')}\n'
-            '${plural(summary.notes, 'note', 'notes')}',
+            '${plural(summary.notes, 'note', 'notes')}'
+            '${summary.slangWords > 0 ? '\n${plural(summary.slangWords, 'slang word', 'slang words')}' : ''}',
           ),
           const SizedBox(height: 12),
           Text(
             'Add to this phone keeps what\'s here and brings in the rest; where a word is '
             'studied in both, the more recently reviewed card wins.\n\n'
-            'Replace clears this phone\'s lists, study progress, pinned meanings and notes first.',
+            'Replace clears this phone\'s lists, study progress, pinned meanings, notes and '
+            'Slang Stack first.',
             style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
           ),
         ],

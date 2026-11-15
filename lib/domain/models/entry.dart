@@ -1,3 +1,5 @@
+import 'slang.dart';
+
 /// Part-of-speech tag as stored on an [Entry], e.g. "noun", "verb", "adj", "adv".
 typedef Pos = String;
 
@@ -15,11 +17,16 @@ class Sense {
   final int order;
   final List<Example> examples;
 
+  /// Set when this is one of the person's own meanings from the Slang
+  /// Stack, for what only those carry (a plain-English gloss, a tone).
+  final SlangSense? slang;
+
   const Sense({
     required this.id,
     required this.gloss,
     required this.order,
     this.examples = const [],
+    this.slang,
   });
 }
 
@@ -63,7 +70,12 @@ class PosSenses {
   final Pos pos;
   final List<Sense> senses;
 
-  const PosSenses({required this.pos, required this.senses});
+  /// True for a group of the person's own Slang Stack meanings. They come
+  /// first on a card — they're why the person added the word — and are
+  /// marked as theirs.
+  final bool isSlang;
+
+  const PosSenses({required this.pos, required this.senses, this.isSlang = false});
 }
 
 /// A dictionary headword merged across every part of speech it's filed
@@ -89,6 +101,11 @@ class WordEntry {
   /// "colour" when the card is "color" — so the screen can say so.
   final String? lookedUpAs;
 
+  /// The person's own Slang Stack entry for this headword, if they made
+  /// one. Its meanings are already in [posGroups]; this carries the rest
+  /// (where it's used, where they heard it, how to say it).
+  final SlangWord? slang;
+
   const WordEntry({
     required this.canonicalEntryId,
     required this.headword,
@@ -98,7 +115,75 @@ class WordEntry {
     this.forms = const [],
     this.variants = const [],
     this.lookedUpAs,
+    this.slang,
   });
+
+  /// A word only the Slang Stack knows — the dictionary has no card for it,
+  /// so the slang word's own id is the one everything keys on.
+  factory WordEntry.fromSlang(SlangWord slang) => WordEntry(
+        canonicalEntryId: slang.id!,
+        headword: slang.headword,
+        forms: [for (final f in slang.forms) WordForm(formText: f, formType: 'slang')],
+        variants: [
+          for (final v in slang.spellings) SpellingVariant(text: v, label: 'slang'),
+        ],
+        posGroups: _slangGroups(slang),
+        slang: slang,
+      );
+
+  /// This dictionary card with the person's own meanings for it added in
+  /// front of the dictionary's, and their spellings and forms alongside.
+  WordEntry withSlang(SlangWord slang) => WordEntry(
+        canonicalEntryId: canonicalEntryId,
+        headword: headword,
+        pronunciation: pronunciation,
+        etymology: etymology,
+        posGroups: [..._slangGroups(slang), ...posGroups],
+        forms: [
+          ...forms,
+          for (final f in slang.forms)
+            if (!forms.any((existing) => existing.formText == f)) WordForm(formText: f, formType: 'slang'),
+        ],
+        variants: [
+          ...variants,
+          for (final v in slang.spellings)
+            if (!variants.any((existing) => existing.text == v)) SpellingVariant(text: v, label: 'slang'),
+        ],
+        lookedUpAs: lookedUpAs,
+        slang: slang,
+      );
+
+  static List<PosSenses> _slangGroups(SlangWord slang) {
+    final order = <String>[];
+    final byPos = <String, List<Sense>>{};
+    for (final s in slang.senses) {
+      final group = byPos.putIfAbsent(s.pos, () {
+        order.add(s.pos);
+        return [];
+      });
+      group.add(Sense(
+        id: s.id!,
+        gloss: s.gloss,
+        order: group.length,
+        // Nothing addresses an example by id; only the dictionary's have one.
+        examples: [for (final text in s.examples) Example(id: 0, text: text)],
+        slang: s,
+      ));
+    }
+    return [for (final pos in order) PosSenses(pos: pos, senses: byPos[pos]!, isSlang: true)];
+  }
+
+  /// True when the dictionary has no card for this word and it exists only
+  /// in the person's Slang Stack.
+  bool get isSlangOnly => isSlangId(canonicalEntryId);
+
+  /// What the pronounce button should read: the person's own respelling
+  /// when they gave one — text-to-speech has never heard most new slang —
+  /// otherwise the headword.
+  String get spokenAs {
+    final say = slang?.sayItLike?.trim();
+    return say == null || say.isEmpty ? headword : say;
+  }
 
   /// This card as reached by [spelling] rather than its own headword.
   WordEntry reachedAs(String spelling) => WordEntry(
@@ -110,6 +195,7 @@ class WordEntry {
         forms: forms,
         variants: variants,
         lookedUpAs: spelling,
+        slang: slang,
       );
 
   /// Every example across every sense, flattened in display order — the
@@ -132,14 +218,36 @@ class EntrySummary {
   /// row can say why a different word is showing up.
   final String? matchedForm;
 
+  /// True when the person has this word in their Slang Stack — either it
+  /// exists only there, or they added their own meaning to the
+  /// dictionary's word.
+  final bool slang;
+
   const EntrySummary({
     required this.id,
     required this.headword,
     required this.pos,
     this.gloss,
     this.matchedForm,
+    this.slang = false,
   });
 
-  EntrySummary withMatchedForm(String form) =>
-      EntrySummary(id: id, headword: headword, pos: pos, gloss: gloss, matchedForm: form);
+  EntrySummary withMatchedForm(String form) => EntrySummary(
+        id: id,
+        headword: headword,
+        pos: pos,
+        gloss: gloss,
+        matchedForm: form,
+        slang: slang,
+      );
+
+  /// The same row, marked as being in the Slang Stack.
+  EntrySummary asSlang() => EntrySummary(
+        id: id,
+        headword: headword,
+        pos: pos,
+        gloss: gloss,
+        matchedForm: matchedForm,
+        slang: true,
+      );
 }

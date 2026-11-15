@@ -25,6 +25,8 @@ import '../features/search/search_screen.dart';
 import '../features/settings/feedback_screen.dart';
 import '../features/settings/licences_screen.dart';
 import '../features/settings/settings_screen.dart';
+import '../features/slang/slang_editor_screen.dart';
+import '../features/slang/slang_stack_screen.dart';
 import '../features/progress/progress_screen.dart';
 import '../features/study/manage_study_screen.dart';
 import '../features/study/study_screen.dart';
@@ -62,6 +64,15 @@ final appRouter = GoRouter(
         // A search result or a tile on the landing board: both are the
         // person choosing a word, which is what a lookup is.
         fromSearch: const {'search', 'board'}.contains(state.uri.queryParameters['from']),
+      ),
+    ),
+    // Adding to or editing the Slang Stack: a full-screen form over
+    // whatever opened it — search, a card, the stack itself.
+    GoRoute(
+      path: '/slang/edit',
+      builder: (context, state) => SlangEditorScreen(
+        headword: state.uri.queryParameters['headword'],
+        fromCard: state.uri.queryParameters['from'] == 'card',
       ),
     ),
     GoRoute(
@@ -173,6 +184,8 @@ final appRouter = GoRouter(
             path: '/lists',
             builder: (context, state) => const ListsScreen(),
             routes: [
+              // Before ':id', which would otherwise try to parse it.
+              GoRoute(path: 'slang', builder: (context, state) => const SlangStackScreen()),
               GoRoute(
                 path: ':id',
                 builder: (context, state) => ListDetailScreen(

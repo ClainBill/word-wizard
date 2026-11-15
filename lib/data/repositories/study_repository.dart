@@ -11,6 +11,7 @@ import '../../domain/models/study_dashboard.dart';
 import '../../domain/models/study_direction.dart';
 import '../../domain/srs/sm2.dart';
 import '../user/user_database.dart';
+import 'lexicon_sql.dart';
 import 'list_hierarchy.dart';
 
 // A card counts as mastered once it clears both SM-2 thresholds from the
@@ -144,6 +145,21 @@ class StudyRepository {
     });
   }
 
+  /// What a [StudyCard] is read from, over `study_cards sc` and
+  /// [_cardJoins]. The word may be the dictionary's or one only the Slang
+  /// Stack knows — see lexicon_sql.dart.
+  static final _cardColumns = '''
+    sc.id AS card_id, sc.entry_id, sc.direction, sc.repetitions, sc.ease_factor,
+    sc.interval_days, sc.due_at, $lexHeadword AS headword, $lexPos AS pos, p.ipa, en.markdown AS note,
+    ${lexFirstGloss('sc.entry_id')} AS gloss,
+    ${lexFirstExample('sc.entry_id')} AS example''';
+
+  static final _cardJoins = '''
+    FROM study_cards sc
+    ${lexJoins('sc.entry_id')}
+    LEFT JOIN dict.pronunciations p ON p.entry_id = sc.entry_id
+    LEFT JOIN entry_notes en ON en.entry_id = sc.entry_id''';
+
   /// [listId] may name a plain list or a folder — a folder pulls in every
   /// word nested inside it at any depth (see list_hierarchy.dart). Filters
   /// list membership with `EXISTS` rather than joining `list_items` directly:
@@ -161,33 +177,17 @@ class StudyRepository {
         .customSelect(
           listId == null
               ? '''
-                SELECT sc.id AS card_id, sc.entry_id, sc.direction, sc.repetitions, sc.ease_factor,
-                       sc.interval_days, sc.due_at, e.headword, e.pos, p.ipa, en.markdown AS note,
-                  (SELECT gloss FROM dict.senses WHERE entry_id = e.id ORDER BY sense_order LIMIT 1) AS gloss,
-                  (SELECT x.text FROM dict.examples x
-                     JOIN dict.senses s2 ON s2.id = x.sense_id
-                     WHERE s2.entry_id = e.id ORDER BY s2.sense_order LIMIT 1) AS example
-                FROM study_cards sc
-                JOIN dict.entries e ON e.id = sc.entry_id
-                LEFT JOIN dict.pronunciations p ON p.entry_id = e.id
-                LEFT JOIN entry_notes en ON en.entry_id = sc.entry_id
-                WHERE sc.due_at <= ? AND sc.paused = 0 AND $filter
+                SELECT $_cardColumns
+                $_cardJoins
+                WHERE sc.due_at <= ? AND sc.paused = 0 AND $filter AND $lexFound
                 ORDER BY sc.due_at
                 LIMIT ?
                 '''
               : '''
                 $listSubtreeCte
-                SELECT sc.id AS card_id, sc.entry_id, sc.direction, sc.repetitions, sc.ease_factor,
-                       sc.interval_days, sc.due_at, e.headword, e.pos, p.ipa, en.markdown AS note,
-                  (SELECT gloss FROM dict.senses WHERE entry_id = e.id ORDER BY sense_order LIMIT 1) AS gloss,
-                  (SELECT x.text FROM dict.examples x
-                     JOIN dict.senses s2 ON s2.id = x.sense_id
-                     WHERE s2.entry_id = e.id ORDER BY s2.sense_order LIMIT 1) AS example
-                FROM study_cards sc
-                JOIN dict.entries e ON e.id = sc.entry_id
-                LEFT JOIN dict.pronunciations p ON p.entry_id = e.id
-                LEFT JOIN entry_notes en ON en.entry_id = sc.entry_id
-                WHERE sc.due_at <= ? AND sc.paused = 0 AND $filter
+                SELECT $_cardColumns
+                $_cardJoins
+                WHERE sc.due_at <= ? AND sc.paused = 0 AND $filter AND $lexFound
                   AND EXISTS (
                     SELECT 1 FROM list_items li
                     WHERE li.entry_id = sc.entry_id AND li.list_id IN (SELECT id FROM list_subtree)
@@ -198,7 +198,7 @@ class StudyRepository {
           variables: listId == null
               ? [now, Variable.withInt(limit)]
               : [Variable.withInt(listId), now, Variable.withInt(limit)],
-          readsFrom: {_db.studyCards, _db.listItems, _db.entryNotes, _db.lists},
+          readsFrom: {_db.studyCards, _db.listItems, _db.entryNotes, _db.lists, _db.slangWords, _db.slangSenses},
         )
         .get();
 
@@ -279,18 +279,28 @@ class StudyRepository {
     final placeholders = entryIds.map((_) => '?').join(',');
     final variables = entryIds.map(Variable.withInt).toList();
 
+    // The person's own Slang Stack meanings sort first, as they do on the
+    // entry page; then the dictionary's, canonical row first.
     final pinnedRows = await _db
         .customSelect(
           '''
-          SELECT ss.entry_id, s.id AS sense_id, s.gloss, e.pos
+          SELECT ss.entry_id, s.id AS sense_id, s.gloss, s.pos,
+                 0 AS k1, 0 AS k2, s.sense_order AS k3
+          FROM study_senses ss
+          JOIN slang_senses s ON s.id = ss.sense_id
+          WHERE ss.entry_id IN ($placeholders) AND ss.excluded = 0
+          UNION ALL
+          SELECT ss.entry_id, s.id AS sense_id, s.gloss, e.pos,
+                 CASE WHEN s.entry_id = ss.entry_id THEN 1 ELSE 2 END AS k1, s.entry_id AS k2,
+                 s.sense_order AS k3
           FROM study_senses ss
           JOIN dict.senses s ON s.id = ss.sense_id
           JOIN dict.entries e ON e.id = s.entry_id
           WHERE ss.entry_id IN ($placeholders) AND ss.excluded = 0
-          ORDER BY ss.entry_id, (s.entry_id = ss.entry_id) DESC, s.entry_id, s.sense_order
+          ORDER BY 1, k1, k2, k3
           ''',
-          variables: variables,
-          readsFrom: {_db.studySenses},
+          variables: [...variables, ...variables],
+          readsFrom: {_db.studySenses, _db.slangSenses},
         )
         .get();
     final pinned = _groupSenses(pinnedRows, await _examplesFor(pinnedRows));
@@ -299,22 +309,37 @@ class StudyRepository {
     final drawn = <int, List<StudySense>>{};
     if (unpinnedIds.isNotEmpty) {
       final unpinnedPlaceholders = unpinnedIds.map((_) => '?').join(',');
-      // Every sense of every entry row sharing the canonical row's headword,
-      // flagged where the user has excluded it.
+      // Every sense of every entry row sharing the canonical row's headword
+      // — the person's own Slang Stack meanings under that headword
+      // included, and first — flagged where the user has excluded it.
+      final unpinnedVars = unpinnedIds.map(Variable.withInt).toList();
       final rows = await _db
           .customSelect(
             '''
-            SELECT ce.id AS entry_id, s.id AS sense_id, s.gloss, e.pos,
+            WITH c(id, headword) AS (
+              SELECT id, headword FROM dict.entries WHERE id IN ($unpinnedPlaceholders)
+              UNION ALL
+              SELECT id, headword FROM slang_words WHERE id IN ($unpinnedPlaceholders)
+            )
+            SELECT c.id AS entry_id, s.id AS sense_id, s.gloss, s.pos,
               EXISTS(SELECT 1 FROM study_senses ss
-                     WHERE ss.entry_id = ce.id AND ss.sense_id = s.id AND ss.excluded = 1) AS excluded
-            FROM dict.entries ce
-            JOIN dict.entries e ON e.headword = ce.headword
+                     WHERE ss.entry_id = c.id AND ss.sense_id = s.id AND ss.excluded = 1) AS excluded,
+              0 AS k1, 0 AS k2, s.sense_order AS k3
+            FROM c
+            JOIN slang_words w ON w.headword = c.headword
+            JOIN slang_senses s ON s.word_id = w.id
+            UNION ALL
+            SELECT c.id AS entry_id, s.id AS sense_id, s.gloss, e.pos,
+              EXISTS(SELECT 1 FROM study_senses ss
+                     WHERE ss.entry_id = c.id AND ss.sense_id = s.id AND ss.excluded = 1) AS excluded,
+              CASE WHEN e.id = c.id THEN 1 ELSE 2 END AS k1, e.id AS k2, s.sense_order AS k3
+            FROM c
+            JOIN dict.entries e ON e.headword = c.headword
             JOIN dict.senses s ON s.entry_id = e.id
-            WHERE ce.id IN ($unpinnedPlaceholders)
-            ORDER BY ce.id, (e.id = ce.id) DESC, e.id, s.sense_order
+            ORDER BY 1, k1, k2, k3
             ''',
-            variables: unpinnedIds.map(Variable.withInt).toList(),
-            readsFrom: {_db.studyCards, _db.studySenses},
+            variables: [...unpinnedVars, ...unpinnedVars],
+            readsFrom: {_db.studyCards, _db.studySenses, _db.slangWords, _db.slangSenses},
           )
           .get();
       final examples = await _examplesFor(rows);
@@ -339,9 +364,15 @@ class StudyRepository {
     final senseIds = senseRows.map((r) => r.read<int>('sense_id')).toSet().toList();
     if (senseIds.isEmpty) return const {};
     final placeholders = senseIds.map((_) => '?').join(',');
+    final variables = senseIds.map(Variable.withInt).toList();
     final rows = await _db.customSelect(
-      'SELECT id, sense_id, text, source FROM dict.examples WHERE sense_id IN ($placeholders) ORDER BY id',
-      variables: senseIds.map(Variable.withInt).toList(),
+      '''
+      SELECT id, sense_id, text, source FROM dict.examples WHERE sense_id IN ($placeholders)
+      UNION ALL
+      SELECT id, sense_id, sentence, NULL FROM slang_examples WHERE sense_id IN ($placeholders)
+      ORDER BY id
+      ''',
+      variables: [...variables, ...variables],
     ).get();
     final bySense = <int, List<Example>>{};
     for (final r in rows) {
@@ -431,17 +462,9 @@ class StudyRepository {
     final rows = await _db
         .customSelect(
           '''
-          SELECT sc.id AS card_id, sc.entry_id, sc.direction, sc.repetitions, sc.ease_factor,
-                 sc.interval_days, sc.due_at, e.headword, e.pos, p.ipa, en.markdown AS note,
-            (SELECT gloss FROM dict.senses WHERE entry_id = e.id ORDER BY sense_order LIMIT 1) AS gloss,
-            (SELECT x.text FROM dict.examples x
-               JOIN dict.senses s2 ON s2.id = x.sense_id
-               WHERE s2.entry_id = e.id ORDER BY s2.sense_order LIMIT 1) AS example
-          FROM study_cards sc
-          JOIN dict.entries e ON e.id = sc.entry_id
-          LEFT JOIN dict.pronunciations p ON p.entry_id = e.id
-          LEFT JOIN entry_notes en ON en.entry_id = sc.entry_id
-          WHERE sc.paused = 0 $filter
+          SELECT $_cardColumns
+          $_cardJoins
+          WHERE sc.paused = 0 $filter AND $lexFound
           ORDER BY sc.due_at
           LIMIT ?
           ''',
@@ -518,15 +541,9 @@ class StudyRepository {
     final rows = await _db
         .customSelect(
           '''
-          SELECT sc.id AS card_id, sc.entry_id, sc.direction, sc.repetitions, sc.ease_factor,
-                 sc.interval_days, sc.due_at, e.headword, e.pos, NULL AS ipa, NULL AS note,
-            (SELECT gloss FROM dict.senses WHERE entry_id = e.id ORDER BY sense_order LIMIT 1) AS gloss,
-            (SELECT x.text FROM dict.examples x
-               JOIN dict.senses s2 ON s2.id = x.sense_id
-               WHERE s2.entry_id = e.id ORDER BY s2.sense_order LIMIT 1) AS example
-          FROM study_cards sc
-          JOIN dict.entries e ON e.id = sc.entry_id
-          WHERE sc.due_at <= ? AND sc.paused = 0
+          SELECT $_cardColumns
+          $_cardJoins
+          WHERE sc.due_at <= ? AND sc.paused = 0 AND $lexFound
           GROUP BY sc.entry_id
           ORDER BY RANDOM()
           LIMIT 1
@@ -724,12 +741,13 @@ class StudyRepository {
     return _db
         .customSelect(
           '''
-          SELECT e.headword, MAX(CASE WHEN $masteredClause THEN 1 ELSE 0 END) AS mastered
+          SELECT $lexHeadword AS headword, MAX(CASE WHEN $masteredClause THEN 1 ELSE 0 END) AS mastered
           FROM study_cards sc
-          JOIN dict.entries e ON e.id = sc.entry_id
-          GROUP BY e.headword
+          ${lexJoins('sc.entry_id')}
+          WHERE $lexFound
+          GROUP BY 1
           ''',
-          readsFrom: {_db.studyCards},
+          readsFrom: {_db.studyCards, _db.slangWords},
         )
         .watch()
         .map(
@@ -761,15 +779,17 @@ class StudyRepository {
         .customSelect(
           '''
           SELECT sc.id AS card_id, sc.entry_id, sc.direction, sc.repetitions, sc.ease_factor,
-                 sc.interval_days, sc.due_at, sc.created_at, sc.paused, e.headword, e.pos,
+                 sc.interval_days, sc.due_at, sc.created_at, sc.paused,
+                 $lexHeadword AS headword, $lexPos AS pos,
             (SELECT COUNT(*) FROM review_log rl WHERE rl.card_id = sc.id) AS review_count
           FROM study_cards sc
-          JOIN dict.entries e ON e.id = sc.entry_id
+          ${lexJoins('sc.entry_id')}
+          WHERE $lexFound
           ORDER BY (SELECT MIN(s2.created_at) FROM study_cards s2
                      WHERE s2.entry_id = sc.entry_id) DESC,
                    sc.entry_id, sc.direction
           ''',
-          readsFrom: {_db.studyCards},
+          readsFrom: {_db.studyCards, _db.slangWords, _db.slangSenses},
         )
         .watch()
         .map((rows) => rows

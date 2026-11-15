@@ -1,15 +1,42 @@
 import '../../domain/models/daily_word.dart';
 import '../../domain/models/entry.dart';
 import '../dictionary/dictionary_database.dart';
+import 'slang_repository.dart';
 
 class SearchRepository {
   final DictionaryDatabase _db;
 
-  SearchRepository(this._db);
+  /// The person's Slang Stack, folded into every lookup here so a word
+  /// they added is found, opened and clued like any other. Null only in
+  /// tests that don't need it.
+  final SlangRepository? _slang;
+
+  SearchRepository(this._db, {SlangRepository? slang}) : _slang = slang;
 
   Future<List<EntrySummary>> search(String query) => _db.search(query);
 
-  Future<WordEntry?> loadWord(String headword) => _db.loadWord(headword);
+  /// The card for [headword]: the dictionary's, with the person's own
+  /// meanings added when they have some for it, or — for a word only the
+  /// Slang Stack knows — the slang word's own card. A spelling or form the
+  /// person filed under a slang word reaches that word.
+  Future<WordEntry?> loadWord(String headword) async {
+    final word = await _db.loadWord(headword);
+    final slang = _slang;
+    if (slang == null) return word;
+    if (word != null) {
+      final own = await slang.byHeadword(word.headword);
+      return own == null ? word : word.withSlang(own);
+    }
+    final own = await slang.byHeadword(headword) ?? await slang.byForm(headword);
+    if (own == null) return null;
+    if (own.headword != headword) {
+      // Reached by one of its spellings or forms: open the word itself,
+      // and say so for a spelling ("fina is a spelling of finna").
+      final target = await loadWord(own.headword);
+      return own.spellings.contains(headword) ? target?.reachedAs(headword) : target;
+    }
+    return WordEntry.fromSlang(own);
+  }
 
   /// The featured word for [day] — see `DictionaryDatabase.wordOfTheDay`.
   Future<DailyWord?> wordOfTheDay(DateTime day) => _db.wordOfTheDay(day);
@@ -23,11 +50,11 @@ class SearchRepository {
   /// "run"). Returns null if the word isn't in the dictionary at all.
   Future<WordEntry?> lookupTappedWord(String word) async {
     final lower = word.toLowerCase();
-    final direct = await _db.loadWord(lower);
+    final direct = await loadWord(lower);
     if (direct != null) return direct;
     final resolved = await _db.resolveForm(lower);
     if (resolved.isEmpty) return null;
-    return _db.loadWord(resolved.first.headword);
+    return loadWord(resolved.first.headword);
   }
 
   /// Wrong-answer options for the study session's definition-match mini
@@ -78,8 +105,19 @@ class SearchRepository {
   /// Alternate clue phrasings per entry (other senses, fill-in-the-blank
   /// example sentences) so the crossword doesn't always show the same
   /// first-sense definition.
-  Future<Map<int, List<String>>> crosswordClueOptions(Map<int, String> headwordsByEntryId) =>
-      _db.crosswordClueOptions(headwordsByEntryId);
+  ///
+  /// A word with the person's own meanings gets those too — after the
+  /// dictionary's, and as its only clues when the dictionary doesn't know
+  /// the word at all.
+  Future<Map<int, List<String>>> crosswordClueOptions(Map<int, String> headwordsByEntryId) async {
+    final options = await _db.crosswordClueOptions(headwordsByEntryId);
+    final slang = await _slang?.clueOptions(headwordsByEntryId.keys);
+    if (slang == null || slang.isEmpty) return options;
+    return {
+      ...options,
+      for (final MapEntry(:key, :value) in slang.entries) key: [...?options[key], ...value],
+    };
+  }
 
   /// Search results with inflection resolution folded in, in the order a
   /// reader wants them: the headword that is exactly the query, then the
@@ -89,24 +127,32 @@ class SearchRepository {
   /// Used to fall back to forms only when the prefix search came back
   /// empty, which for any short inflection it never did — "ran*" always
   /// matches "range" — so "run" never appeared for "ran" at all.
+  ///
+  /// Slang Stack words are folded in alongside: a dictionary row the person
+  /// added their own meaning to is marked as theirs, and a word only the
+  /// Slang Stack knows goes with the exact match when it is one, else
+  /// straight after the lemmas — the person's own words are the likeliest
+  /// thing they're looking for, ahead of the dictionary's long tail.
   Future<List<EntrySummary>> searchOrResolve(String query) async {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return const [];
     final results = await _db.search(query);
     final lemmas = await _db.resolveForm(trimmed);
-    if (lemmas.isEmpty) return results;
+    final slang = await _slang?.search(trimmed) ?? const <EntrySummary>[];
 
     final lower = trimmed.toLowerCase();
+    final slangHeadwords = {for (final s in slang) s.headword};
+    EntrySummary mark(EntrySummary r) => slangHeadwords.contains(r.headword) ? r.asSlang() : r;
     final seen = <String>{};
     final merged = <EntrySummary>[];
-    for (final r in results) {
-      if (r.headword.toLowerCase() == lower && seen.add(r.headword)) merged.add(r);
+    for (final r in [...results, ...slang]) {
+      if (r.headword.toLowerCase() == lower && seen.add(r.headword)) merged.add(mark(r));
     }
     for (final l in lemmas) {
-      if (seen.add(l.headword)) merged.add(l.withMatchedForm(trimmed));
+      if (seen.add(l.headword)) merged.add(mark(l.withMatchedForm(trimmed)));
     }
-    for (final r in results) {
-      if (seen.add(r.headword)) merged.add(r);
+    for (final r in [...slang, ...results]) {
+      if (seen.add(r.headword)) merged.add(mark(r));
     }
     return merged;
   }

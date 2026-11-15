@@ -15,12 +15,14 @@ import '../data/repositories/reader_repository.dart';
 import '../data/repositories/score_repository.dart';
 import '../data/repositories/search_repository.dart';
 import '../data/repositories/settings_repository.dart';
+import '../data/repositories/slang_repository.dart';
 import '../data/repositories/study_repository.dart';
 import '../domain/board/word_board.dart';
 import '../domain/crossword/crossword_models.dart';
 import '../domain/models/daily_word.dart';
 import '../domain/models/progress.dart';
 import '../domain/models/reader_document.dart';
+import '../domain/models/slang.dart';
 import '../domain/models/study_dashboard.dart';
 import '../domain/games/scoring.dart';
 import '../domain/groups/group_models.dart';
@@ -48,9 +50,27 @@ final appDatabasesProvider = Provider<AppDatabases>(
   (ref) => throw UnimplementedError('appDatabasesProvider must be overridden in main()'),
 );
 
-final searchRepositoryProvider = Provider<SearchRepository>(
-  (ref) => SearchRepository(ref.watch(appDatabasesProvider).dictionary),
+final slangRepositoryProvider = Provider<SlangRepository>(
+  (ref) => SlangRepository(ref.watch(appDatabasesProvider).user),
 );
+
+final searchRepositoryProvider = Provider<SearchRepository>(
+  (ref) => SearchRepository(
+    ref.watch(appDatabasesProvider).dictionary,
+    slang: ref.watch(slangRepositoryProvider),
+  ),
+);
+
+/// The Slang Stack, newest first.
+final slangStackProvider = StreamProvider<List<SlangWord>>(
+  (ref) => ref.watch(slangRepositoryProvider).watchStack(),
+);
+
+/// Bumped whenever a slang word is saved or deleted. Every provider that
+/// loads a word card watches it, so a card already open — the entry page
+/// under the editor, a peek in the reader — shows the edit at once rather
+/// than the word as it was when first opened.
+final slangEditsProvider = StateProvider<int>((ref) => 0);
 
 final listRepositoryProvider = Provider<ListRepository>(
   (ref) => ListRepository(ref.watch(appDatabasesProvider).user),
@@ -244,10 +264,13 @@ final readerCurrentDocumentProvider = StreamProvider<ReaderDocument?>(
 
 /// Every word of one document resolved against the dictionary. Keyed by
 /// content hash as well as id so an edit re-analyzes but a rename doesn't.
+/// Re-run when the Slang Stack changes, so a word just added to it lights
+/// up on the page it was found on.
 typedef ReaderAnalysisKey = ({int id, String contentHash});
 
 final readerAnalysisProvider =
     FutureProvider.autoDispose.family<ReaderAnalysis, ReaderAnalysisKey>((ref, key) async {
+  ref.watch(slangEditsProvider);
   final repo = ref.watch(readerRepositoryProvider);
   final doc = await repo.getDocument(key.id);
   if (doc == null) return const ReaderAnalysis([]);

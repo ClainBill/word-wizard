@@ -271,6 +271,14 @@ class ReaderRepository {
         UNION ALL
         SELECT c.w, v.headword, 2, NULL
         FROM c JOIN dict.spelling_variants v ON v.variant = c.w
+        UNION ALL
+        SELECT c.w, w.headword, 0, NULL
+        FROM c JOIN slang_words w ON w.headword = c.w
+        UNION ALL
+        SELECT c.w, w.headword, CASE f.form_type WHEN 'spelling' THEN 2 ELSE 1 END, NULL
+        FROM c
+        JOIN slang_forms f ON f.form_text = c.w
+        JOIN slang_words w ON w.id = f.word_id
         ''',
         variables: [for (final s in chunk) Variable.withString(s)],
       ).get();
@@ -335,6 +343,40 @@ class ReaderRepository {
           gloss: r.readNullable<String>('gloss'),
           frequencyRank: r.readNullable<int>('frequency_rank'),
         );
+      }
+
+      // The Slang Stack: a word only it knows resolves to the slang word
+      // (no frequency rank, so it reads as uncommon, which it is); a
+      // dictionary word the person added a meaning to keeps its own id but
+      // shows their meaning — it's the one they wanted to remember.
+      final slangRows = await _db.customSelect(
+        '''
+        SELECT w.id, w.headword,
+          (SELECT pos FROM slang_senses s WHERE s.word_id = w.id ORDER BY sense_order LIMIT 1) AS pos,
+          (SELECT gloss FROM slang_senses s WHERE s.word_id = w.id ORDER BY sense_order LIMIT 1) AS gloss
+        FROM slang_words w
+        WHERE w.headword IN ($placeholders)
+        ''',
+        variables: [for (final h in chunk) Variable.withString(h)],
+      ).get();
+      for (final r in slangRows) {
+        final headword = r.read<String>('headword');
+        final gloss = r.readNullable<String>('gloss');
+        final known = result[headword];
+        result[headword] = known == null
+            ? ResolvedWord(
+                headword: headword,
+                entryId: r.read<int>('id'),
+                pos: r.readNullable<String>('pos') ?? 'slang',
+                gloss: gloss,
+              )
+            : ResolvedWord(
+                headword: headword,
+                entryId: known.entryId,
+                pos: gloss == null ? known.pos : r.read<String>('pos'),
+                gloss: gloss ?? known.gloss,
+                frequencyRank: known.frequencyRank,
+              );
       }
     }
     return result;

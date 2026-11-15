@@ -10,6 +10,8 @@ Static pages served from Cloudflare Workers at https://wordwizard.wcgill.com.
 
 URLs: `/`, `/privacy`, `/terms`, `/delete-account`.
 
+Editing the wording: `node edit.mjs`, then open http://localhost:4321. Click any text on the page to change it; the Panel button covers the page title, share-card text and the demos' scripted captions. Save (⌘S) writes straight into `public/*.html` — check with `git diff`, then deploy as below. `edit.mjs` and `edit-client.js` stay local; wrangler only uploads `public/`.
+
 Deploy:
 
 ```sh

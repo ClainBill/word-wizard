@@ -4,19 +4,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
 import '../../data/repositories/study_repository.dart' show SenseChoices, StudyRepository;
 import '../../widgets/ad_banner.dart';
 import '../premium/premium_prompt.dart';
 import '../../domain/models/entry.dart';
+import '../../domain/models/slang.dart';
+import '../slang/slang_chips.dart';
 import '../../widgets/add_to_list_sheet.dart';
 import '../../widgets/ipa_label.dart';
 import '../../widgets/pos_tag.dart';
 import '../../widgets/tappable_word_text.dart';
 
 final _wordProvider = FutureProvider.family<WordEntry?, String>(
-  (ref, headword) => ref.watch(searchRepositoryProvider).loadWord(headword),
+  (ref, headword) {
+    ref.watch(slangEditsProvider);
+    return ref.watch(searchRepositoryProvider).loadWord(headword);
+  },
 );
 
 final _isStudyingProvider = FutureProvider.family<bool, int>(
@@ -121,12 +127,18 @@ class WordBody extends ConsumerWidget {
             IconButton(
               icon: const Icon(Icons.volume_up_outlined),
               tooltip: 'Pronounce',
-              onPressed: () => ref.read(ttsProvider).speak(word.headword),
+              onPressed: () => ref.read(ttsProvider).speak(word.spokenAs),
             ),
           ],
         ),
         IpaLabel(word.pronunciation.ipa),
+        if (word.slang?.sayItLike != null)
+          Text(
+            'Say it like “${word.slang!.sayItLike}”',
+            style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
+          ),
         _SpellingsLine(word),
+        if (word.slang != null) SlangChips(word: word.slang!),
         const SizedBox(height: 16),
         Row(
           children: [
@@ -183,10 +195,39 @@ class WordBody extends ConsumerWidget {
             onHoldLonger: (sense) =>
                 _toggleExclude(ref, sense, studying: studying, choices: choices),
           ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            icon: Icon(word.slang == null ? Icons.bolt_outlined : Icons.edit_outlined, size: 18),
+            label: Text(word.slang == null ? 'Add your own meaning' : 'Edit your slang'),
+            onPressed: () => _editSlang(context),
+          ),
+        ),
 
         // The free tier's banner, inline with the card, above the origin.
         // Nothing (no gap) for Premium.
         const AdBanner(inline: true),
+
+        // The person's own backstory for it, from the Slang Stack.
+        if (word.slang?.heardAt != null || word.slang?.origin != null) ...[
+          const SizedBox(height: 8),
+          _SectionHeader(icon: Icons.bolt_outlined, label: 'Your backstory'),
+          const SizedBox(height: 8),
+          if (word.slang?.heardAt != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                'Heard it: ${word.slang!.heardAt}',
+                style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, height: 1.5),
+              ),
+            ),
+          if (word.slang?.origin != null)
+            TappableWordText(
+              word.slang!.origin!,
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, height: 1.5),
+            ),
+          const SizedBox(height: 12),
+        ],
 
         // 3. Etymology
         if (word.etymology != null) ...[
@@ -246,6 +287,18 @@ class WordBody extends ConsumerWidget {
         _NotesEditor(entryId: word.canonicalEntryId),
       ],
     );
+  }
+
+  /// Opens the Slang Stack editor on this word — its own slang entry, or a
+  /// new one filed under its headword. If that removes a word only the
+  /// Slang Stack knew, this card has nothing left to show and closes.
+  Future<void> _editSlang(BuildContext context) async {
+    final deleted = await context.push<bool>(
+      '/slang/edit?headword=${Uri.encodeQueryComponent(word.headword)}&from=card',
+    );
+    if (deleted == true && word.isSlangOnly && context.mounted) {
+      await Navigator.of(context).maybePop();
+    }
   }
 
   static String _sensesCaption(bool studying, SenseChoices choices, WordEntry word) {
@@ -382,7 +435,12 @@ class _PosSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          PosTag(group.pos),
+          Row(
+            children: [
+              PosTag(group.pos),
+              if (group.isSlang) ...[const SizedBox(width: 6), const SlangBadge()],
+            ],
+          ),
           const SizedBox(height: 8),
           for (final sense in group.senses)
             _SenseRow(
@@ -506,7 +564,9 @@ class _SenseRowState extends State<_SenseRow> {
                 child: AnimatedOpacity(
                   duration: const Duration(milliseconds: 180),
                   opacity: showExcluded ? 0.45 : 1,
-                  child: TappableWordText(widget.sense.gloss),
+                  child: widget.sense.slang == null
+                      ? TappableWordText(widget.sense.gloss)
+                      : _SlangSenseText(widget.sense),
                 ),
               ),
               AnimatedSwitcher(
@@ -716,6 +776,54 @@ class _SpellingsLine extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// One of the person's own meanings: the gloss, then its plain-English
+/// equivalent, and a warning when they marked it crude or offensive.
+class _SlangSenseText extends StatelessWidget {
+  final Sense sense;
+
+  const _SlangSenseText(this.sense);
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final slang = sense.slang!;
+    final plain = slang.plainEnglish;
+    final tone = slang.tone;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TappableWordText(sense.gloss),
+        if (plain != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text('≈ $plain', style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant)),
+          ),
+        if (tone != null && tone != SlangTone.everyday)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (tone.isWarning) ...[
+                  Icon(Icons.warning_amber_rounded, size: 14, color: scheme.error),
+                  const SizedBox(width: 4),
+                ],
+                Text(
+                  tone.isWarning ? '${tone.label} · ${tone.description}' : tone.label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: tone.isWarning ? scheme.error : scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

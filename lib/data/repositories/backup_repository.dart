@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart';
 
+import '../../domain/models/slang.dart';
 import '../user/user_database.dart';
+import 'slang_repository.dart';
 
 /// What a backup file holds, for the confirmation before restoring it.
 typedef BackupSummary = ({
@@ -10,12 +12,21 @@ typedef BackupSummary = ({
   int cards,
   int reviews,
   int notes,
+  int slangWords,
   DateTime? exportedAt,
 });
 
 /// What a restore did — including the words this dictionary doesn't have
 /// (a backup made with a different dictionary build), which are skipped.
-typedef RestoreResult = ({int lists, int listWords, int cards, int reviews, int notes, int skippedWords});
+typedef RestoreResult = ({
+  int lists,
+  int listWords,
+  int cards,
+  int reviews,
+  int notes,
+  int slangWords,
+  int skippedWords,
+});
 
 /// A file that isn't a Word Wizard backup, or is from a newer app.
 class BackupFormatException implements Exception {
@@ -28,14 +39,18 @@ class BackupFormatException implements Exception {
 /// Backs up and restores the things a person builds by hand and can't get
 /// back otherwise: their lists (with folders and per-list notes), their
 /// study cards with every review behind them, the meanings they pinned or
-/// excluded, and their notes on words. Puzzles, reading history and
+/// excluded, their notes on words, and their Slang Stack — every word and
+/// meaning they wrote themselves, which no dictionary can give back.
+/// Puzzles, reading history and
 /// settings aren't included — they're either regenerated daily or cheap to
 /// redo.
 ///
 /// Words are keyed by dictionary entry id, and each id travels with its
 /// headword. A dictionary rebuild can renumber entries, so on restore an id
 /// that no longer names the same headword is resolved again by headword;
-/// pinned meanings are matched by their gloss the same way.
+/// pinned meanings are matched by their gloss the same way. Slang words
+/// are restored first and get new ids on this device, and the same
+/// headword rule maps everything that pointed at them.
 ///
 /// The format is plain JSON and versioned ([formatVersion]); a restore
 /// refuses a file from a newer version rather than half-reading it.
@@ -45,13 +60,17 @@ class BackupRepository {
   BackupRepository(this._db);
 
   static const format = 'word-wizard-backup';
-  static const formatVersion = 1;
+  /// 2 added the Slang Stack. A version-1 file still restores; a
+  /// version-1 app refuses a version-2 file rather than silently dropping
+  /// the person's own words.
+  static const formatVersion = 2;
 
   // -------------------------------------------------------------------
   // Export
   // -------------------------------------------------------------------
 
   Future<Map<String, dynamic>> export({required String appVersion, DateTime? now}) async {
+    final slang = await SlangRepository(_db).all();
     final lists = await _db.select(_db.lists).get();
     final items = await _db.select(_db.listItems).get();
     final cards = await _db.select(_db.studyCards).get();
@@ -125,8 +144,58 @@ class BackupRepository {
         for (final n in notes)
           {'entryId': n.entryId, 'markdown': n.markdown, 'updatedAt': n.updatedAt.toUtc().toIso8601String()},
       ],
+      'slang': [for (final w in slang) _slangToJson(w)],
     };
   }
+
+  static Map<String, dynamic> _slangToJson(SlangWord w) => {
+        'id': w.id,
+        'headword': w.headword,
+        'sayItLike': w.sayItLike,
+        'spellings': w.spellings,
+        'forms': w.forms,
+        'region': w.region,
+        'scene': w.scene,
+        'freshness': w.freshness?.storageKey,
+        'heardAt': w.heardAt,
+        'origin': w.origin,
+        'createdAt': w.createdAt?.toUtc().toIso8601String(),
+        'senses': [
+          for (final s in w.senses)
+            {
+              'id': s.id,
+              'pos': s.pos,
+              'gloss': s.gloss,
+              'plainEnglish': s.plainEnglish,
+              'tone': s.tone?.storageKey,
+              'examples': s.examples,
+            },
+        ],
+      };
+
+  static SlangWord _slangFromJson(Map<String, dynamic> j, DateTime now) => SlangWord(
+        headword: (j['headword'] as String).trim(),
+        sayItLike: j['sayItLike'] as String?,
+        spellings: [for (final s in j['spellings'] as List? ?? const []) '$s'],
+        forms: [for (final s in j['forms'] as List? ?? const []) '$s'],
+        region: j['region'] as String?,
+        scene: j['scene'] as String?,
+        freshness: SlangFreshness.fromStorageKey(j['freshness'] as String?),
+        heardAt: j['heardAt'] as String?,
+        origin: j['origin'] as String?,
+        createdAt: _date(j['createdAt'], now),
+        senses: [
+          for (final raw in j['senses'] as List? ?? const [])
+            if (raw is Map && raw['gloss'] is String)
+              SlangSense(
+                pos: raw['pos'] as String? ?? 'noun',
+                gloss: raw['gloss'] as String,
+                plainEnglish: raw['plainEnglish'] as String?,
+                tone: SlangTone.fromStorageKey(raw['tone'] as String?),
+                examples: [for (final x in raw['examples'] as List? ?? const []) '$x'],
+              ),
+        ],
+      );
 
   Future<Map<int, String>> _headwords(Set<int> ids) async {
     if (ids.isEmpty) return {};
@@ -140,6 +209,13 @@ class BackupRepository {
         variables: [for (final id in chunk) Variable.withInt(id)],
       ).get();
       for (final r in rows) {
+        out[r.read<int>('id')] = r.read<String>('headword');
+      }
+      final slangRows = await _db.customSelect(
+        'SELECT id, headword FROM slang_words WHERE id IN (${List.filled(chunk.length, '?').join(',')})',
+        variables: [for (final id in chunk) Variable.withInt(id)],
+      ).get();
+      for (final r in slangRows) {
         out[r.read<int>('id')] = r.read<String>('headword');
       }
     }
@@ -157,6 +233,13 @@ class BackupRepository {
         variables: [for (final id in chunk) Variable.withInt(id)],
       ).get();
       for (final r in rows) {
+        out[r.read<int>('id')] = r.read<String>('gloss');
+      }
+      final slangRows = await _db.customSelect(
+        'SELECT id, gloss FROM slang_senses WHERE id IN (${List.filled(chunk.length, '?').join(',')})',
+        variables: [for (final id in chunk) Variable.withInt(id)],
+      ).get();
+      for (final r in slangRows) {
         out[r.read<int>('id')] = r.read<String>('gloss');
       }
     }
@@ -178,6 +261,7 @@ class BackupRepository {
       cards: cards.length,
       reviews: _rows(map, 'reviews').length,
       notes: _rows(map, 'notes').length,
+      slangWords: _rows(map, 'slang').length,
       exportedAt: DateTime.tryParse(map['exportedAt'] as String? ?? '')?.toLocal(),
     );
   }
@@ -221,7 +305,6 @@ class BackupRepository {
     final entries = {
       for (final e in (map['entries'] as Map? ?? const {}).entries) int.parse('${e.key}'): e.value as String?,
     };
-    final resolved = await _resolveEntries(entries);
     final now = DateTime.now();
 
     Future<int> count(String table) async =>
@@ -236,7 +319,44 @@ class BackupRepository {
         await _db.customStatement('DELETE FROM lists');
         await _db.delete(_db.studySenses).go();
         await _db.delete(_db.entryNotes).go();
+        await _db.delete(_db.slangExamples).go();
+        await _db.delete(_db.slangSenses).go();
+        await _db.delete(_db.slangForms).go();
+        await _db.delete(_db.slangWords).go();
       }
+
+      // ---- The Slang Stack, first: everything below that points at a
+      // slang word or meaning finds it again by headword and gloss ----
+      final slangBefore = await count('slang_words');
+      final slangRepo = SlangRepository(_db);
+      for (final raw in _rows(map, 'slang')) {
+        if (raw['headword'] is! String || (raw['headword'] as String).trim().isEmpty) continue;
+        final theirs = _slangFromJson(raw, now);
+        final mine = await slangRepo.byHeadword(theirs.headword);
+        if (mine == null) {
+          await slangRepo.save(theirs);
+          continue;
+        }
+        // Both sides have the word: keep this device's, and add what only
+        // the backup knows — meanings by gloss, spellings, forms, and any
+        // detail this device left blank.
+        final glosses = {for (final s in mine.senses) s.gloss};
+        await slangRepo.save(SlangWord(
+          id: mine.id,
+          headword: mine.headword,
+          sayItLike: mine.sayItLike ?? theirs.sayItLike,
+          spellings: {...mine.spellings, ...theirs.spellings}.toList(),
+          forms: {...mine.forms, ...theirs.forms}.toList(),
+          region: mine.region ?? theirs.region,
+          scene: mine.scene ?? theirs.scene,
+          freshness: mine.freshness ?? theirs.freshness,
+          heardAt: mine.heardAt ?? theirs.heardAt,
+          origin: mine.origin ?? theirs.origin,
+          createdAt: mine.createdAt,
+          senses: [...mine.senses, ...theirs.senses.where((s) => !glosses.contains(s.gloss))],
+        ));
+      }
+      final resolved = await _resolveEntries(entries);
 
       // ---- Lists, parents first so every child finds its folder ----
       final backupLists = _rows(map, 'lists');
@@ -402,6 +522,7 @@ class BackupRepository {
         cards: cards,
         reviews: reviews,
         notes: await count('entry_notes') - notesBefore,
+        slangWords: await count('slang_words') - slangBefore,
         skippedWords: skipped.length,
       );
     });
@@ -425,11 +546,17 @@ class BackupRepository {
         out[e.key] = e.key;
         continue;
       }
+      // The dictionary's canonical row first; failing that, a slang word
+      // of that headword (restored above, so its id here is new).
       final row = await _db.customSelect(
         'SELECT id FROM dict.entries WHERE headword = ? '
         'ORDER BY (frequency_rank IS NULL), frequency_rank, pos LIMIT 1',
         variables: [Variable.withString(headword)],
-      ).getSingleOrNull();
+      ).getSingleOrNull() ??
+          await _db.customSelect(
+            'SELECT id FROM slang_words WHERE headword = ?',
+            variables: [Variable.withString(headword)],
+          ).getSingleOrNull();
       if (row != null) out[e.key] = row.read<int>('id');
     }
     return out;
@@ -438,17 +565,30 @@ class BackupRepository {
   /// A pinned meaning's sense id in this dictionary: the same id if it
   /// still carries the same gloss, else the sense with that gloss among the
   /// entry's headword.
+  ///
+  /// The meaning may be one of the person's own: the slang meanings filed
+  /// under the same headword are searched by gloss too.
   Future<int?> _resolveSense(int entryId, int senseId, String? gloss) async {
     final same = await _db.customSelect(
-      'SELECT gloss FROM dict.senses WHERE id = ?',
+      isSlangId(senseId) ? 'SELECT gloss FROM slang_senses WHERE id = ?' : 'SELECT gloss FROM dict.senses WHERE id = ?',
       variables: [Variable.withInt(senseId)],
     ).getSingleOrNull();
     if (same != null && (gloss == null || same.read<String>('gloss') == gloss)) return senseId;
     if (gloss == null) return null;
+    final headword = (await _headwords({entryId}))[entryId];
+    if (headword == null) return null;
     final row = await _db.customSelect(
+      'SELECT s.id FROM slang_senses s JOIN slang_words w ON w.id = s.word_id '
+      'WHERE w.headword = ? AND s.gloss = ? '
+      'UNION ALL '
       'SELECT s.id FROM dict.senses s JOIN dict.entries e ON e.id = s.entry_id '
-      'WHERE e.headword = (SELECT headword FROM dict.entries WHERE id = ?) AND s.gloss = ? LIMIT 1',
-      variables: [Variable.withInt(entryId), Variable.withString(gloss)],
+      'WHERE e.headword = ? AND s.gloss = ? LIMIT 1',
+      variables: [
+        Variable.withString(headword),
+        Variable.withString(gloss),
+        Variable.withString(headword),
+        Variable.withString(gloss),
+      ],
     ).getSingleOrNull();
     return row?.read<int>('id');
   }

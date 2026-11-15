@@ -123,6 +123,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> with WidgetsBinding
     context.push('/entry/${Uri.encodeComponent(headword)}?from=board');
   }
 
+  /// Whether the results end with "add it to your Slang Stack": only when
+  /// nothing in them is the word as typed.
+  bool get _offerSlang {
+    final query = _controller.text.trim().toLowerCase();
+    return query.isNotEmpty && !_results.any((r) => r.headword.toLowerCase() == query);
+  }
+
   void _rerun(String query) {
     _controller.text = query;
     _controller.selection = TextSelection.collapsed(offset: query.length);
@@ -176,12 +183,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen> with WidgetsBinding
                 ? _LandingBoard(onOpen: _openFromBoard)
                 : _results.isEmpty
                 ? _controller.text.trim().isNotEmpty
-                    ? const _EmptyState(hasQuery: true)
+                    ? _loading
+                        ? const SizedBox.shrink()
+                        : ListView(
+                            children: [
+                              const _EmptyState(hasQuery: true),
+                              _AddSlangTile(query: _controller.text.trim()),
+                            ],
+                          )
                     : _RecentSearches(onPick: _rerun)
                 : ListView.separated(
-                    itemCount: _results.length,
+                    // The last row offers the query to the Slang Stack —
+                    // unless it's already a word there, or the dictionary's
+                    // own exact match (which can take a meaning from its card).
+                    itemCount: _results.length + (_offerSlang ? 1 : 0),
                     separatorBuilder: (context, i) => const Divider(height: 1),
                     itemBuilder: (context, i) {
+                      if (i == _results.length) return _AddSlangTile(query: _controller.text.trim());
                       final e = _results[i];
                       return EntryCard(entry: e, onTap: () => _open(e));
                     },
@@ -229,6 +247,31 @@ class _LandingBoard extends ConsumerWidget {
           onShuffle: () => ref.invalidate(boardWordsProvider),
         );
       },
+    );
+  }
+}
+
+/// "Add “skrrt” to your Slang Stack" — the way in from a search that came
+/// up short, which is where most slang is first noticed missing.
+class _AddSlangTile extends StatelessWidget {
+  final String query;
+
+  const _AddSlangTile({required this.query});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListTile(
+      leading: Icon(Icons.bolt, color: scheme.tertiary),
+      title: Text.rich(
+        TextSpan(children: [
+          const TextSpan(text: 'Add '),
+          TextSpan(text: '“$query”', style: const TextStyle(fontWeight: FontWeight.w600)),
+          const TextSpan(text: ' to your Slang Stack'),
+        ]),
+      ),
+      subtitle: const Text('A word or meaning the dictionary doesn\'t have yet'),
+      onTap: () => context.push('/slang/edit?headword=${Uri.encodeQueryComponent(query)}'),
     );
   }
 }

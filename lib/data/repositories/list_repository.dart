@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 
 import '../../domain/models/word_list.dart';
 import '../user/user_database.dart';
+import 'lexicon_sql.dart';
 import 'list_hierarchy.dart';
 
 class ListRepository {
@@ -116,15 +117,15 @@ class ListRepository {
     return _db
         .customSelect(
           '''
-          SELECT li.entry_id, li.note, li.added_at, e.headword, e.pos,
-            (SELECT gloss FROM dict.senses WHERE entry_id = e.id ORDER BY sense_order LIMIT 1) AS gloss
+          SELECT li.entry_id, li.note, li.added_at, $lexHeadword AS headword, $lexPos AS pos,
+            ${lexFirstGloss('li.entry_id')} AS gloss
           FROM list_items li
-          JOIN dict.entries e ON e.id = li.entry_id
-          WHERE li.list_id = ?
+          ${lexJoins('li.entry_id')}
+          WHERE li.list_id = ? AND $lexFound
           ORDER BY li.added_at DESC
           ''',
           variables: [Variable.withInt(listId)],
-          readsFrom: {_db.listItems},
+          readsFrom: {_db.listItems, _db.slangWords, _db.slangSenses},
         )
         .watch()
         .map((rows) => rows
